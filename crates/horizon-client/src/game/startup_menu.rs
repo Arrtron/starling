@@ -1555,6 +1555,38 @@ mod tests {
     }
 
     #[test]
+    fn retry_after_a_delivered_failure_reads_the_new_loader_result() {
+        let (sender, receiver) = std::sync::mpsc::channel();
+        sender
+            .send(LoaderMsg::Done(Err("first failure".into())))
+            .unwrap();
+        drop(sender);
+        let mut loading = loading(receiver);
+        loading.poll_menu_resources().unwrap();
+        assert!(loading.loaded.take().unwrap().is_err());
+        loading.failure = Some("first failure".into());
+        let scratch = std::env::temp_dir().join(format!(
+            "starling-retry-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        loading.vanilla_root = scratch.clone();
+        loading.options =
+            Options::parse(["--resources".to_owned(), scratch.display().to_string()].into_iter())
+                .unwrap();
+        loading.retry().unwrap();
+        loading.handle.take().unwrap().join().unwrap();
+        loading.poll_menu_resources().unwrap();
+        assert!(
+            matches!(loading.loaded, Some(Err(_))),
+            "the replacement loader's result must be delivered even if the first attempt failed"
+        );
+    }
+
+    #[test]
     fn the_world_renderer_waits_for_the_first_title_frame() {
         let (_send, receiver) = std::sync::mpsc::channel();
         let mut loading = loading(receiver);

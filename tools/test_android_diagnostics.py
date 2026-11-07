@@ -46,6 +46,7 @@ horizon-threads = {{ path = "{threads}" }}
         "spans": "crates/horizon-client-render/src/spans.rs",
         "diagnostics": "crates/horizon-client/src/diagnostics.rs",
         "performance": "crates/horizon-client/src/performance.rs",
+        "preparer_install": "crates/horizon-client/src/preparer_install.rs",
     }
     code = '''#![allow(dead_code)]
 extern crate self as horizon_client;

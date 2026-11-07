@@ -21591,6 +21591,7 @@ impl Loading {
         self.receiver = receiver;
         self.handle = Some(handle);
         self.loaded = None;
+        self.delivered = false;
         self.failure = None;
         log::info!("Horizon: resources imported, loading again");
         Ok(())

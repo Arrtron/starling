@@ -21588,10 +21588,8 @@ impl Loading {
             self.started,
             &self.progress,
         )?;
-        self.receiver = receiver;
-        self.handle = Some(handle);
-        self.loaded = None;
-        self.delivered = false;
+        // Follow the new generation after the failed startup's result was delivered.
+        self.follow_loader(receiver, handle);
         self.failure = None;
         log::info!("Horizon: resources imported, loading again");
         Ok(())

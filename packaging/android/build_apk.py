@@ -77,7 +77,8 @@ def sdk_dir():
 
 def tool(directory, name):
     """An SDK tool, with Windows' .exe or .bat suffix."""
-    for suffix in ("", ".exe", ".bat", ".cmd"):
+    suffixes = (".exe", ".bat", ".cmd", "") if os.name == "nt" else ("", ".exe", ".bat", ".cmd")
+    for suffix in suffixes:
         path = directory / (name + suffix)
         if path.is_file():
             return path
@@ -96,6 +97,14 @@ def ndk_tool(ndk, name):
 
 def build_library(profile, ndk, sdk):
     env = dict(os.environ, ANDROID_NDK_HOME=str(ndk), ANDROID_HOME=str(sdk))
+    # Preserve source identity in local diagnostic reports, including source builds.
+    try:
+        env["HORIZON_ANDROID_BUILD_COMMIT"] = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=ROOT, text=True, stderr=subprocess.DEVNULL).strip()
+        env["HORIZON_ANDROID_BUILD_DIRTY"] = str(bool(subprocess.check_output(
+            ["git", "status", "--porcelain"], cwd=ROOT, text=True))).lower()
+    except (OSError, subprocess.CalledProcessError):
+        pass  # An exported source archive may not have Git metadata.
     env["RUSTFLAGS"] = (env.get("RUSTFLAGS", "") + " " + PAGE_FLAGS).strip()
     run(
         "cargo", "ndk", "-t", ABI, "--platform", MIN_SDK,

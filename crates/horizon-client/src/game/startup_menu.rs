@@ -55,6 +55,7 @@ pub(super) struct StartupMenu {
     pub pending: Option<PendingWorldEntry>,
     pub reload_packs: bool,
     pub perf: horizon_client::telemetry::Session,
+    pub(super) diagnostic_frame: Option<Instant>,
 }
 
 impl StartupMenu {
@@ -359,6 +360,8 @@ pub(super) fn spawn_loader(
     started: Instant,
     progress: &Progress,
 ) -> Result<(Receiver<LoaderMsg>, JoinHandle<()>)> {
+    #[cfg(target_os = "android")]
+    crate::diagnostics::checkpoint("resource_loading", || serde_json::json!({}));
     let (sender, receiver) = std::sync::mpsc::channel();
     let settings = settings.clone();
     let vanilla_root = vanilla_root.to_path_buf();
@@ -693,6 +696,22 @@ impl Loading {
     fn menu_option_events(&mut self, events: Vec<Event>) {
         for event in events {
             match event {
+                Event::DiagnosticsExport => super::diagnostics::export_diagnostics(),
+                Event::DiagnosticsOpen => super::diagnostics::open_diagnostics(),
+                Event::DiagnosticsRecord => {
+                    if crate::performance::active() {
+                        crate::performance::stop();
+                    } else if let Err(error) = crate::performance::start(
+                        &horizon_client::logging::private_home(),
+                        serde_json::json!({"phase":"setup"}),
+                    ) {
+                        log::warn!("Cannot start performance recording: {error}");
+                    }
+                }
+                Event::DiagnosticsGpu => crate::performance::configure_gpu_profile(
+                    !crate::performance::gpu_profile(),
+                    &horizon_client::logging::private_home(),
+                ),
                 Event::Changed => {
                     self.save_menu_settings();
                     self.apply_menu_settings();
@@ -1364,6 +1383,16 @@ impl Loading {
     }
 
     pub(super) fn draw_menu(&mut self, batch: &mut HudBatch) {
+        self.menu.options.diagnostics_status = super::diagnostics::status();
+        if let Some(r) = &self.renderer {
+            self.menu
+                .options
+                .diagnostics_status
+                .push(horizon_client::lang::tr(
+                    "starling.diagnostics.hardware",
+                    &[&r.info.name, &format!("{:?}", r.info.backend)],
+                ));
+        }
         self.menu_button_image();
         let logs = horizon_client::logging::recent_lines();
         let Some(gui) = &self.gui else {

@@ -79,7 +79,7 @@ pub unsafe fn on_create(
 
 /// Run `f` with the activity, on the calling thread (attached to the VM for the call). None
 /// before the game starts, or when the call threw (the exception is logged and cleared).
-fn with_activity<R>(
+pub(crate) fn with_activity<R>(
     f: impl FnOnce(&mut jni::JNIEnv, &jni::objects::JObject) -> jni::errors::Result<R>,
 ) -> Option<R> {
     let app = APP.get()?;
@@ -1266,6 +1266,12 @@ pub fn main(app: AndroidApp) {
     horizon_protocol::set_name_servers(dns_servers);
     let _ = ARGS.set(args.clone());
     let _ = APP.set(app);
+    if let Err(error) =
+        crate::diagnostics::initialize(&private, serde_json::json!({"abi":std::env::consts::ARCH}))
+    {
+        log::warn!("Could not initialize diagnostics: {error}");
+    }
+    crate::diagnostics::collect_exits(&private);
     crate::entry::start(Default::default(), || {
         log::info!(
             "Horizon: Android, game folder {}, private files {}, arguments {args:?}, environment {env:?}",
@@ -1288,6 +1294,8 @@ pub fn main(app: AndroidApp) {
 /// again an app whose process ends under its top activity, as after a crash: finish it, and its
 /// onDestroy ends the process.
 pub fn finish_and_exit() -> ! {
+    crate::performance::stop();
+    crate::diagnostics::finish();
     with_activity(|env, activity| env.call_method(activity, "finish", "()V", &[]).map(drop));
     std::thread::sleep(std::time::Duration::from_secs(3));
     // Else, or once the activity is gone: Android may keep the process and start a new activity
@@ -1296,4 +1304,19 @@ pub fn finish_and_exit() -> ! {
     // that the app's Java threads (hwui) still use, and the process would abort instead.
     // SAFETY: ends the process at once; the log was flushed before.
     unsafe { _exit(0) }
+}
+
+/// Shares only a finished diagnostic ZIP through the existing read-only provider.
+pub fn share_diagnostic(name: &str) -> bool {
+    with_activity(|env, activity| {
+        let value = env.new_string(name)?;
+        env.call_method(
+            activity,
+            "shareDiagnostic",
+            "(Ljava/lang/String;)V",
+            &[jni::objects::JValue::Object(&value)],
+        )
+        .map(drop)
+    })
+    .is_some()
 }

@@ -131,6 +131,22 @@ public final class StarlingActivity extends NativeActivity {
                 : null;
     }
 
+    /** Only the explicitly exported diagnostic ZIP is shared; no app data directory grant. */
+    public void shareDiagnostic(final String name) {
+        if (!name.matches("starling-diagnostics-[0-9]+\\.zip")) return;
+        runOnUiThread(new Runnable() {
+            @Override public void run() {
+                Uri uri = Uri.parse("content://" + getPackageName() + ".updates/diagnostics/" + name);
+                Intent send = new Intent(Intent.ACTION_SEND).setType("application/zip");
+                send.putExtra(Intent.EXTRA_STREAM, uri);
+                send.setClipData(ClipData.newRawUri("diagnostic report", uri));
+                send.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                try { startActivity(Intent.createChooser(send, null)); }
+                catch (ActivityNotFoundException e) { android.util.Log.w("starling", "No report sharing activity", e); }
+            }
+        });
+    }
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         loadGame();

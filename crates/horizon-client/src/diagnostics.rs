@@ -79,10 +79,8 @@ pub fn initialize(home: &Path, device: Value) -> io::Result<()> {
     }
     let dir = home.join("performance");
     fs::create_dir_all(&dir)?;
-    for (old, new) in [("current-session.json", "previous-session.json")] {
-        if let Ok(data) = tail(&dir.join(old), LOG_LIMIT) {
-            fs::write(dir.join(new), data)?;
-        }
+    if let Ok(data) = tail(&dir.join("current-session.json"), LOG_LIMIT) {
+        fs::write(dir.join("previous-session.json"), data)?;
     }
     let session = json!({"schema":1,"pid":std::process::id(),"start_ms":timestamp(),
         "version":crate::crash::version(),"source_commit":option_env!("HORIZON_ANDROID_BUILD_COMMIT"),

@@ -23,6 +23,12 @@ memory. A missing clean-exit marker indicates an interrupted process, which can
 also be an Android kill or a force stop. It does not by itself prove a crash.
 Fatal errors returned through the normal entry point keep that marker unset.
 
+The Diagnostics screen itself needs a working renderer. A repeated failure before
+the setup screen leaves reports on disk, but the in-game export cannot be opened.
+Debug builds allow developers to retrieve private reports with `adb run-as`;
+release builds do not. A renderer-independent recovery/export entry point is
+still missing.
+
 On Android 11 and newer, `ApplicationExitInfo` can distinguish native/Java crashes,
 ANRs, low-memory and other exits. Availability depends on the OS. Up to eight
 system traces, at most 1 MiB each, stay in private app storage. Binary native

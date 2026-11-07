@@ -153,3 +153,41 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh workflow run native-mods.yml -R "$GITHUB_REPOSITORY" --ref android -f version="${GITHUB_REF_NAME#v}"
+
+  armv7:
+    # Experimental ABI: validate PRs and manual builds without publishing a release.
+    if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Install Android SDK and ARMv7 toolchain
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install \
+            "build-tools;35.0.0" "platforms;android-36" "ndk;28.2.13676358" > /dev/null
+          rustup toolchain install stable --profile minimal --target armv7-linux-androideabi
+          rustup default stable
+          cargo install cargo-ndk --version 3.5.4 --locked
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: android-armv7
+      - name: Unpack the preview debug key
+        env:
+          KEYSTORE: ${{ secrets.STARLING_DEBUG_KEYSTORE_BASE64 }}
+        run: |
+          test -n "$KEYSTORE" || exit 0
+          mkdir -p target/android
+          echo "$KEYSTORE" | base64 -d > target/android/debug.keystore
+      - name: Build experimental ARMv7 APK
+        run: python packaging/android/build_apk.py --abi armeabi-v7a --preview
+      - uses: actions/upload-artifact@v4
+        with:
+          name: starling-armv7-apk
+          path: target/android/starling-*-armeabi-v7a.apk

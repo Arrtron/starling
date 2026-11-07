@@ -22,6 +22,13 @@ pub const JRE25_ANDROID_ARM64: Runtime = Runtime {
     size: 38_031_580,
 };
 
+/// OpenJDK 25.0.5 for Android ARMv7, pinned to the published release's SHA-256.
+pub const JRE25_ANDROID_ARM: Runtime = Runtime {
+    url: "https://github.com/AngelAuraMC/angelauramc-openjdk-build/releases/download/download_jre25/jre25-android-arm.tar.xz",
+    sha256: "9ae13aee9cba7b2d2d8f40965061667e876d7380d866f37a992db3eff296ffb5",
+    size: 28_252_088,
+};
+
 /// Written in the runtime's folder once it is unpacked: the archive's hash.
 const INSTALLED: &str = ".starling-runtime";
 

@@ -183,11 +183,13 @@ pub mod compositor;
 mod cull;
 mod end_sky;
 pub mod entity_skin;
+mod entity_source;
 mod flat;
 mod frame_gen;
 mod hdr;
 mod hdr_icc;
 mod hdr_stats;
+mod terrain_source;
 pub use hdr::Calibration as HdrCalibration;
 pub mod block_light;
 pub mod lightning;
@@ -2219,10 +2221,11 @@ impl Renderer {
         let kept = reuse.on(&device);
         let pipelines_step = crate::spans::startup::step("renderer.pipelines_textures");
         let terrain_step = crate::spans::startup::step("renderer.terrain_pipelines");
+        let gl = adapter.get_info().backend == wgpu::Backend::Gl;
         let gpu_timer = timing::GpuTimer::new(&device, &queue);
         let shader = kept.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Horizon terrain"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("terrain.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(terrain_source::terrain_shader(gl)),
         });
         let entry = |binding, visibility, ty| wgpu::BindGroupLayoutEntry {
             binding,
@@ -2654,7 +2657,6 @@ impl Renderer {
             ),
         };
         let mut mip_levels = 1;
-        let gl = adapter.get_info().backend == wgpu::Backend::Gl;
         // The resource packs' LabPBR maps, for native shader packs: one array each, cut to
         // the layers the GPU has (`block_normal_map` gives the default past them).
         let pbr_maps = prepared
@@ -2778,7 +2780,7 @@ impl Renderer {
             ..Default::default()
         });
         let emission_stats =
-            hdr_stats::EmissionStats::new(&device, split, sprite_textures.len() as u32);
+            hdr_stats::EmissionStats::new(&device, split, sprite_textures.len() as u32, gl);
         let group = terrain_group(
             &device,
             "Horizon terrain resources",
@@ -2932,11 +2934,19 @@ impl Renderer {
         let entity_step = crate::spans::startup::step("renderer.entity_pipelines");
         let entity_shader = kept.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Horizon entities"),
-            source: wgpu::ShaderSource::Wgsl(entity_shader().into()),
+            source: wgpu::ShaderSource::Wgsl(if gl {
+                entity_source::legacy_overlay(&entity_shader()).into()
+            } else {
+                entity_shader().into()
+            }),
         });
         let static_entity_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Horizon static block entities"),
-            source: wgpu::ShaderSource::Wgsl(static_entity_shader().into()),
+            source: wgpu::ShaderSource::Wgsl(if gl {
+                entity_source::legacy_overlay(&static_entity_shader()).into()
+            } else {
+                static_entity_shader().into()
+            }),
         });
         let entity_bindings = kept.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("Entity bindings"),

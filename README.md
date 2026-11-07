@@ -72,6 +72,9 @@ What the Android port covers so far; what is being done now and next is in the [
 | Setting up on the phone | <img src="docs/media/progress/100.svg" alt="100%"> | Prepared on a phone in 79 s from the official 26.3 files, with Java fetched for it; fishing and hand-drawn settings while it works |
 | Microsoft account sign-in | <img src="docs/media/progress/100.svg" alt="100%"> | On the first start and in the game (the title screen's corner); the code and the ownership check work on a phone |
 
+Experimental ARMv7 build instructions and GPU/memory limitations are documented in
+[Android ARMv7](docs/android-armv7.md). The normal release remains ARM64.
+
 ## Mods
 
 Starling runs Horizon's mods. Open the file with Starling, from your file manager or your downloads, and it shows up in **Options > Mods**.

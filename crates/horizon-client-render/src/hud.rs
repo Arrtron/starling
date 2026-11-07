@@ -109,6 +109,13 @@ pub const GLYPH_ROWS: u32 = 512;
 /// The largest atlas side: the 2D texture limit of the GPUs Horizon runs on
 /// (Apple silicon, RADV and Intel allow 16384; NVIDIA 32768).
 pub const MAX_ATLAS_SIZE: u32 = 16384;
+// A 16384-square RGBA atlas alone costs 1 GiB before staging/decoded images.
+// Keep the 32-bit process's shared atlas within 64 MiB, even on a powerful GPU.
+const PROCESS_ATLAS_SIDE: u32 = if cfg!(target_pointer_width = "32") {
+    4096
+} else {
+    MAX_ATLAS_SIZE
+};
 /// Below this a texture at half size stops being worth what it costs to look at.
 const SMALLEST_SHRUNK_SIDE: u32 = 32;
 /// A side of a GPU's largest texture, once the renderer has found the GPU; 0 before.
@@ -129,8 +136,8 @@ fn atlas_limit() -> u32 {
         }
     }
     match side() {
-        0 => MAX_ATLAS_SIZE,
-        side => side.min(MAX_ATLAS_SIZE),
+        0 => PROCESS_ATLAS_SIDE,
+        side => side.min(PROCESS_ATLAS_SIDE),
     }
 }
 /// `image` at half its size, by every other texel: no new colors or alpha, so what was cut out
@@ -352,7 +359,7 @@ fn cit_sprites(
     // can be packed as (a strip's frame, or a still image whole), 1024x512 at most since
     // `cit_sprite` refuses more, with a gutter;
     // the glyph rows and the shelves' waste (a tenth) are kept aside.
-    let side = u64::from(MAX_ATLAS_SIZE);
+    let side = u64::from(PROCESS_ATLAS_SIDE);
     let used: u64 = packed
         .iter()
         .map(|i| u64::from(i.1 + 1) * u64::from(i.2 + 1))

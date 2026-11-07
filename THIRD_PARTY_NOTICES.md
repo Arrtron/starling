@@ -206,6 +206,18 @@ The touch controls wear Minecraft: Bedrock Edition's own buttons, which Starling
 phone from Mojang's [bedrock-samples](https://github.com/Mojang/bedrock-samples) repository (the
 revision and each file's git blob SHA-1 in `crates/horizon-client/assets/bedrock-touch.json`, which
 `tools/bedrock_touch_manifest.py` writes) into the player's resources, Mojang's `LICENSE.md` beside
-them. They are © Mojang AB, under the Minecraft End User License Agreement the download is subject
+them. They are Â© Mojang AB, under the Minecraft End User License Agreement the download is subject
 to; Starling carries none of them. Where they are missing, Starling's own buttons
 (`crates/horizon-client/assets/touch`, drawn by `packaging/touch/make.py`) are MIT.
+
+## Horizon Android legacy GLES compatibility
+
+The GLES-only terrain texture selection, RGSS unrolling, varying packing,
+emissive lookup and entity overlay lowering, and HDR texture selection are
+adapted from [Vasysik/horizon-android at fa548eb7abe91c194d3780e4580b9746323cd606](https://github.com/Vasysik/horizon-android/tree/fa548eb7abe91c194d3780e4580b9746323cd606/crates/horizon-client-render/src/gfx).
+The source is MIT, copyright (c) 2026 Ludovic Marie and the Horizon contributors;
+the repository LICENSE retains its license text.
+
+The adaptation preserves Starling's RGSS tiled-face argument, HDR scene varying
+and all 128 emissive entries. The emissive search uses flat early returns to keep
+shader parser/validator stack depth bounded. Vulkan retains its original WGSL.

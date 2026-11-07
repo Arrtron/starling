@@ -3,6 +3,9 @@
 //! the preparer's kit the app carries (`assets/prepare-kit.zip`, build_apk.py), then
 //! horizon-prepare over those files with the app's Java launchers. What it makes becomes the
 //! game's resources folder; the runtime goes once it is done.
+#[cfg(target_arch = "arm")]
+use starling_account::java::JRE25_ANDROID_ARM as RUNTIME;
+#[cfg(not(target_arch = "arm"))]
 use starling_account::java::JRE25_ANDROID_ARM64 as RUNTIME;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard, OnceLock, PoisonError};

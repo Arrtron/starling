@@ -160,6 +160,39 @@ fn query(env: &mut JNIEnv<'_>, activity: &JObject<'_>, dir: &Path) -> jni::error
     report["exits"] = rows.into();
     Ok(report)
 }
+/// Explicit recovery export on a worker attached to the recovery activity's VM.
+/// No NativeActivity, renderer, game startup or session rotation is involved.
+pub(super) fn collect_now(
+    home: &Path,
+    env: &mut JNIEnv<'_>,
+    activity: &JObject<'_>,
+) -> Result<(), String> {
+    let dir = home.join("performance");
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let report = query(env, activity, &dir).map_err(|e| {
+        let _ = env.exception_clear();
+        e.to_string()
+    })?;
+    super::atomic_json(&dir.join("android-exits.json"), &report).map_err(|e| e.to_string())?;
+    prune(&dir);
+    Ok(())
+}
+fn prune(dir: &Path) {
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        let mut files: Vec<_> = entries
+            .flatten()
+            .filter(|e| {
+                e.file_name().to_string_lossy().starts_with("exit-")
+                    && e.path().extension().is_some_and(|s| s == "trace")
+            })
+            .collect();
+        files.sort_by_key(|e| e.file_name());
+        let excess = files.len().saturating_sub(8);
+        for file in files.into_iter().take(excess) {
+            let _ = std::fs::remove_file(file.path());
+        }
+    }
+}
 pub fn collect(home: &Path) {
     let dir = home.join("performance");
     if std::fs::create_dir_all(&dir).is_err() {
@@ -197,12 +230,8 @@ pub fn collect(home: &Path) {
             result
         });
         let report = result.unwrap_or_else(|e|json!({"schema":2,"collection_status":"failed","error":e.to_string(),"exits":[]}));
-        if let Ok(bytes)=serde_json::to_vec_pretty(&report) { let _=std::fs::write(dir.join("android-exits.json"),bytes); }
-        if let Ok(entries)=std::fs::read_dir(&dir) {
-            let mut files:Vec<_>=entries.flatten().filter(|e|e.file_name().to_string_lossy().starts_with("exit-")&&e.path().extension().is_some_and(|s|s=="trace")).collect();
-            files.sort_by_key(|e|e.file_name());let excess=files.len().saturating_sub(8);
-            for f in files.into_iter().take(excess){let _=std::fs::remove_file(f.path());}
-        }
+        let _ = super::atomic_json(&dir.join("android-exits.json"), &report);
+        prune(&dir);
     });
     if let Err(error) = spawn {
         let _ = std::fs::write(

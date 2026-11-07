@@ -72,6 +72,9 @@ public final class LauncherActivity extends Activity {
                     play();
                 }
             });
+        } else if (StartupRecovery.interrupted(this)) {
+            startActivity(new Intent(this, DiagnosticsActivity.class));
+            finish();
         } else {
             play();
         }

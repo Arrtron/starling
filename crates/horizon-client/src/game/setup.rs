@@ -753,7 +753,10 @@ impl Loading {
             }
             Action::Settings => self.open_menu_options(horizon_client::options_ui::Page::Main),
             Action::Diagnostics => {
-                self.open_menu_options(horizon_client::options_ui::Page::Diagnostics)
+                #[cfg(target_os = "android")]
+                crate::android::open_recovery();
+                #[cfg(not(target_os = "android"))]
+                self.open_menu_options(horizon_client::options_ui::Page::Diagnostics);
             }
             Action::Retry => match (preparer::stage(), accounts::files()) {
                 (Stage::Failed(_) | Stage::Idle, Files::Ready) => {

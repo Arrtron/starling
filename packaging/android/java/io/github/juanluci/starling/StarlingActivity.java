@@ -131,6 +131,12 @@ public final class StarlingActivity extends NativeActivity {
                 : null;
     }
 
+    public void openDiagnostics() {
+        runOnUiThread(new Runnable() {
+            @Override public void run() { startActivity(new Intent(StarlingActivity.this, DiagnosticsActivity.class)); }
+        });
+    }
+
     /** Only the explicitly exported diagnostic ZIP is shared; no app data directory grant. */
     public void shareDiagnostic(final String name) {
         if (!name.matches("starling-diagnostics-[0-9]+\\.zip")) return;
@@ -149,6 +155,7 @@ public final class StarlingActivity extends NativeActivity {
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
+        StartupRecovery.begin(this);
         loadGame();
         // Before super.onCreate starts the game's thread, which reads it first thing.
         onStorage(sharedFolder(this));
@@ -174,7 +181,7 @@ public final class StarlingActivity extends NativeActivity {
         decor.postDelayed(new Runnable() {
             @Override
             public void run() {
-                firstFrame();
+                showFirstFrame();
             }
         }, 10000);
         if (Build.VERSION.SDK_INT >= 28) {
@@ -462,6 +469,11 @@ public final class StarlingActivity extends NativeActivity {
 
     /** The game drew its first frame: let the window show. */
     public void firstFrame() {
+        StartupRecovery.shown(this);
+        showFirstFrame();
+    }
+
+    private void showFirstFrame() {
         NativeMods.started(this);
         runOnUiThread(new Runnable() {
             @Override

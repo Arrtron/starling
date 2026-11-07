@@ -53,6 +53,11 @@
             android:excludeFromRecents="true"
             android:noHistory="true"
             android:theme="@android:style/Theme.Translucent.NoTitleBar">
+            <meta-data android:name="android.app.shortcuts" android:resource="@xml/shortcuts" />
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
             <!-- Packs, worlds, shader packs, mods and prepared resources as .zip, opened with
                  or shared to Starling. -->
             <intent-filter>
@@ -105,11 +110,11 @@
             <!-- Hands over to a build with native mods when the activity loaded one
                  (android_lib.rs). -->
             <meta-data android:name="android.app.func_name" android:value="starling_on_create" />
-            <intent-filter>
-                <action android:name="android.intent.action.MAIN" />
-                <category android:name="android.intent.category.LAUNCHER" />
-            </intent-filter>
+
         </activity>
+        <activity android:name="io.github.juanluci.starling.DiagnosticsActivity"
+            android:exported="true" android:process=":diagnostics"
+            android:theme="@style/Starling.Game" android:hardwareAccelerated="false" />
         <service
             android:name="io.github.juanluci.starling.WorkService"
             android:exported="false"

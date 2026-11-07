@@ -13,6 +13,8 @@ ORIGINAL_JDK_TOOLS = {"tools/JfrSummary.java", "tests/java/JfrFixture.java"}
 ORIGINAL_ANDROID = {
     "packaging/android/java/io/github/juanluci/starling/StarlingActivity.java",
     "packaging/android/java/io/github/juanluci/starling/LauncherActivity.java",
+    "packaging/android/java/io/github/juanluci/starling/DiagnosticsActivity.java",
+    "packaging/android/java/io/github/juanluci/starling/StartupRecovery.java",
     "packaging/android/java/io/github/juanluci/starling/TextMirror.java",
     "packaging/android/java/io/github/juanluci/starling/UpdateProvider.java",
     "packaging/android/java/io/github/juanluci/starling/NativeMods.java",

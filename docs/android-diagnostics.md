@@ -23,11 +23,19 @@ memory. A missing clean-exit marker indicates an interrupted process, which can
 also be an Android kill or a force stop. It does not by itself prove a crash.
 Fatal errors returned through the normal entry point keep that marker unset.
 
-The Diagnostics screen itself needs a working renderer. A repeated failure before
-the setup screen leaves reports on disk, but the in-game export cannot be opened.
-Debug builds allow developers to retrieve private reports with `adb run-as`;
-release builds do not. A renderer-independent recovery/export entry point is
-still missing.
+Before resources are installed, the setup's **Diagnostics** button opens a
+separate Android window styled with the setup's shared dark palette and Geist
+fonts. Its labels are English, matching the setup. It can preview the latest log,
+export and share a ZIP, or retry starting the game without initializing the game
+renderer. Long-press the launcher icon and choose **Diagnostics** to open it
+directly. A failed early startup also routes the next normal launch there.
+
+The startup marker is written before loading the game library and cleared after
+its first presented frame. The recovery process leaves the original session and
+logs in place; it does not rotate them or start the game to export them. The
+window itself does not load the native library; preview/export loads it lazily.
+If that library cannot load, the window still opens and displays the error, but
+native ZIP export is unavailable.
 
 On Android 11 and newer, `ApplicationExitInfo` can distinguish native/Java crashes,
 ANRs, low-memory and other exits. Availability depends on the OS. Up to eight
@@ -55,3 +63,21 @@ automatic backend benchmark, change the selected graphics API or add a 32-bit AP
 Run `python tools/test_android_diagnostics.py` to test the production writers,
 exporter, tombstone parser, frame summaries and span aggregation on the host.
 Build an ARM64 APK with `python packaging/android/build_apk.py` for device tests.
+
+## Resource installation
+
+Android uses an exclusive kernel file lock for preparation: the Rust standard
+library's file locking is unavailable on some Android toolchains. Concurrent
+preparation still waits for the same folder; the lock is not skipped.
+
+The installer checks the prepared schema, tables and auxiliary assets, including
+sounds, before activating resources. It keeps the previous resource folder until
+the new folder is published and restores it if publication fails. Retrying after
+a failed load resets the loader generation so the finished installation can reach
+the title screen instead of staying at **Starting Starling**.
+
+Starling generates its resource tables with Java exporters on the device. The
+older Android fork downloaded pre-generated engine tables instead, so their
+preparation times are not directly comparable. Download concurrency alone does
+not remove the exporter work. Public source trees and APKs do not contain
+Minecraft jars or prepared Minecraft resources.

@@ -10,6 +10,14 @@ mod native_tombstone;
 pub fn collect_exits(home: &Path) {
     exit_reports::collect(home);
 }
+#[cfg(target_os = "android")]
+pub(crate) fn recovery_exits(
+    home: &Path,
+    env: &mut jni::JNIEnv<'_>,
+    activity: &jni::objects::JObject<'_>,
+) -> Result<(), String> {
+    exit_reports::collect_now(home, env, activity)
+}
 use serde_json::{Value, json};
 use std::{
     fs::{self, File},
@@ -68,7 +76,7 @@ pub fn tail(path: &Path, limit: u64) -> io::Result<Vec<u8>> {
     Ok(out)
 }
 fn atomic_json(path: &Path, value: &Value) -> io::Result<()> {
-    let temp = path.with_extension("partial");
+    let temp = path.with_extension(format!("partial-{}", std::process::id()));
     fs::write(&temp, serde_json::to_vec_pretty(value)?)?;
     fs::rename(temp, path)
 }
@@ -223,6 +231,13 @@ pub fn redact(text: &str) -> String {
                 domain
                     .replace_all(&line, |caps: &regex::Captures<'_>| {
                         let name = &caps[0];
+                        // Bracketed log timestamps are not IPv6 addresses.
+                        if let Some(rest) = name.strip_prefix('[')
+                            && let Some((candidate, _)) = rest.split_once(']')
+                            && candidate.parse::<std::net::Ipv6Addr>().is_err()
+                        {
+                            return name.to_owned();
+                        }
                         let extension = name.rsplit('.').next().unwrap_or_default();
                         if matches!(
                             extension,
@@ -255,7 +270,7 @@ pub fn redact(text: &str) -> String {
 pub fn export(home: &Path) -> Result<PathBuf, String> {
     export_from(home, &crate::logging::player_dir())
 }
-fn export_from(home: &Path, player: &Path) -> Result<PathBuf, String> {
+pub(crate) fn export_from(home: &Path, player: &Path) -> Result<PathBuf, String> {
     flush();
     let dir = home.join("performance");
     fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
@@ -434,6 +449,15 @@ mod tests {
         }
         assert!(text.contains("libvulkan.so"));
         assert!(text.contains("abcdef123456"));
+    }
+    #[test]
+    fn redaction_preserves_log_timestamps_while_hiding_ipv6() {
+        let result = redact(
+            "[22:30:07] [main/ERROR]: failed at game.rs:82\npeer [2001:db8::1]:25565\npeer [::1]",
+        );
+        assert!(result.contains("[22:30:07] [main/ERROR]: failed at game.rs:82"));
+        assert!(!result.contains("2001:db8"));
+        assert!(!result.contains("[::1]"));
     }
     #[test]
     fn export_allowlist_bounds_and_binary_trace_manifest() {

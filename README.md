@@ -74,7 +74,9 @@ What the Android port covers so far; what is being done now and next is in the [
 Local crash reports, Android exit history and optional CPU/GPU performance
 recordings are available under **Options → Diagnostics**. Export a diagnostic ZIP,
 review it, then share it with a bug report. See [Android diagnostics](docs/android-diagnostics.md)
-for contents, limits and controls.
+for contents, limits and controls. Before installation or after an early startup
+failure, Diagnostics also opens in a separate window; long-press the app icon to
+reach it without starting the game.
 
 ## Mods
 

@@ -1320,3 +1320,50 @@ pub fn share_diagnostic(name: &str) -> bool {
     })
     .is_some()
 }
+
+/// Independent recovery process: only filesystem/JNI diagnostics, never a renderer.
+pub fn recovery_report(
+    env: &mut jni::JNIEnv<'_>,
+    activity: &jni::objects::JObject<'_>,
+    private: &Path,
+    game: &Path,
+    export: bool,
+) -> Result<String, String> {
+    let (args, _) = command_line(private);
+    let value = |flag: &str| {
+        args.windows(2).find(|pair| pair[0] == flag).map(|pair| {
+            let path = PathBuf::from(&pair[1]);
+            if path.is_absolute() {
+                path
+            } else {
+                game.join(path)
+            }
+        })
+    };
+    let player = value("--player-dir")
+        .or_else(|| value("--home"))
+        .unwrap_or_else(|| game.to_path_buf());
+    if export {
+        // Exit history can be unavailable on an older Android; logs remain exportable.
+        if let Err(error) = crate::diagnostics::recovery_exits(private, env, activity) {
+            let _ = std::fs::write(
+                private.join("performance/android-exits.json"),
+                serde_json::json!({"schema":2,"collection_status":"failed","error":error})
+                    .to_string(),
+            );
+        }
+        crate::diagnostics::export_from(private, &player)
+            .map(|path| path.file_name().unwrap().to_string_lossy().into_owned())
+    } else {
+        crate::diagnostics::tail(&player.join("logs/latest.log"), 32 * 1024)
+            .map(|data| crate::diagnostics::redact(&String::from_utf8_lossy(&data)))
+            .map_err(|e| e.to_string())
+    }
+}
+
+pub fn open_recovery() {
+    with_activity(|env, activity| {
+        env.call_method(activity, "openDiagnostics", "()V", &[])
+            .map(drop)
+    });
+}

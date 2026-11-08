@@ -76,6 +76,16 @@ jobs:
               }
               log::info!("Horizon iOS: installing the game files into {}", home.display());
               let home = home.to_path_buf();
+              // The generated engine tables ship inside the app (as in the Android APK).
+              let bundled = std::env::current_exe().ok().and_then(|e| Some(e.parent()?.join("engine-data.zip")));
+              match bundled {
+                  Some(src) if src.is_file() => {
+                      if let Err(e) = std::fs::copy(&src, home.join("engine-data.zip")) {
+                          log::error!("Horizon iOS: cannot copy the engine tables: {e}");
+                      }
+                  }
+                  _ => log::error!("Horizon iOS: engine-data.zip is missing from the app"),
+              }
               std::thread::spawn(move || {
                   let last = AtomicU64::new(u64::MAX);
                   let result = horizon_client::official_install::install_with_progress(&home, |p| {
@@ -136,6 +146,19 @@ jobs:
           cargo build -p horizon-client --bin horizon-client \
             --profile fast --target aarch64-apple-ios --no-default-features \
             --keep-going 2>&1 | tee ios-build.log
+      - name: Get the engine tables from the public Android release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -e
+          gh release download v0.7.8 -R starling-client/starling -p '*.apk' -D apk
+          ls -la apk
+          APK=$(ls apk/*arm64* 2>/dev/null | head -1)
+          if [ -z "$APK" ]; then APK=$(ls apk/*.apk | head -1); fi
+          echo "Using $APK"
+          mkdir -p engine
+          unzip -o -j "$APK" assets/engine-data.zip -d engine
+          ls -la engine
       - name: Package an unsigned IPA
         run: |
           set -e
@@ -144,6 +167,7 @@ jobs:
           APP=out/Payload/Horizon.app
           mkdir -p "$APP"
           cp "$BIN" "$APP/Horizon"
+          cp engine/engine-data.zip "$APP/engine-data.zip"
           cat > "$APP/Info.plist" <<'PLIST_EOF'
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">

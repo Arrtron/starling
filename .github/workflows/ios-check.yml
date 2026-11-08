@@ -11,6 +11,79 @@ jobs:
       HORIZON_TELEMETRY_URL: 'off'
     steps:
       - uses: actions/checkout@v4
+      - name: Apply iOS patch
+        run: |
+          git apply --whitespace=nowarn <<'PATCH_EOF'
+          diff --git a/crates/horizon-client-input/Cargo.toml b/crates/horizon-client-input/Cargo.toml
+          index 361e71e..e320e2f 100644
+          --- a/crates/horizon-client-input/Cargo.toml
+          +++ b/crates/horizon-client-input/Cargo.toml
+          @@ -15,7 +15,7 @@ png = "0.18"
+           # The DualSense's trigger effects (the `controllers` feature).
+           horizon-dualsense = { path = "../horizon-dualsense", optional = true }
+
+          -[target.'cfg(not(target_os = "android"))'.dependencies]
+          +[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
+           arboard = { version = "3.6.1", default-features = false, features = ["wayland-data-control"] }
+
+           [features]
+          diff --git a/crates/horizon-client-input/src/clipboard.rs b/crates/horizon-client-input/src/clipboard.rs
+          index 70ee986..3180c0d 100644
+          --- a/crates/horizon-client-input/src/clipboard.rs
+          +++ b/crates/horizon-client-input/src/clipboard.rs
+          @@ -125,7 +125,7 @@ pub trait Clipboard {
+           /// game can still be pasted in the game.
+           #[derive(Default)]
+           pub struct SystemClipboard {
+          -    #[cfg(not(target_os = "android"))]
+          +    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+               system: Option<arboard::Clipboard>,
+               /// The text Horizon last copied (`horizon-ctl status`).
+               copied: Option<String>,
+          @@ -136,7 +136,7 @@ impl SystemClipboard {
+               pub fn copied(&self) -> Option<&str> {
+                   self.copied.as_deref()
+               }
+          -    #[cfg(not(target_os = "android"))]
+          +    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+               fn system(&mut self) -> Option<&mut arboard::Clipboard> {
+                   if self.system.is_none() {
+                       self.system = arboard::Clipboard::new().ok();
+          @@ -149,7 +149,9 @@ impl Clipboard for SystemClipboard {
+               fn get(&mut self) -> String {
+                   #[cfg(target_os = "android")]
+                   return clipboard_get().unwrap_or_else(|| self.copied.clone().unwrap_or_default());
+          -        #[cfg(not(target_os = "android"))]
+          +        #[cfg(target_os = "ios")]
+          +        return self.copied.clone().unwrap_or_default();
+          +        #[cfg(not(any(target_os = "android", target_os = "ios")))]
+                   {
+                       let Some(system) = self.system() else {
+                           return self.copied.clone().unwrap_or_default();
+          @@ -172,7 +174,7 @@ impl Clipboard for SystemClipboard {
+                   self.copied = Some(text.to_owned());
+                   #[cfg(target_os = "android")]
+                   clipboard_set(text);
+          -        #[cfg(not(target_os = "android"))]
+          +        #[cfg(not(any(target_os = "android", target_os = "ios")))]
+                   if let Some(system) = self.system()
+                       && system.set_text(text.to_owned()).is_err()
+                   {
+          diff --git a/crates/horizon-client/Cargo.toml b/crates/horizon-client/Cargo.toml
+          index 0df8ae2..0aafe86 100644
+          --- a/crates/horizon-client/Cargo.toml
+          +++ b/crates/horizon-client/Cargo.toml
+          @@ -77,7 +77,7 @@ fs4 = { version = "1.1.0", default-features = false, features = ["sync"] }
+           # The server thread's CPU time per tick (`HORIZON_SPIKES`, spans.rs).
+           rustix = { version = "1", default-features = false, features = ["std", "time", "process", "fs"] }
+
+          -[target.'cfg(not(target_os = "android"))'.dependencies]
+          +[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
+           arboard = { version = "3.6.1", default-features = false, features = ["wayland-data-control"] }
+
+           [target.'cfg(target_os = "android")'.dependencies]
+          PATCH_EOF
+          git diff --stat
       - name: Install Rust toolchain and iOS target
         run: |
           rustup show
@@ -20,7 +93,16 @@ jobs:
           set -o pipefail
           cargo check -p horizon-client --lib \
             --target aarch64-apple-ios --no-default-features \
-            --message-format short 2>&1 | tee ios-check.log
+            --keep-going --message-format short 2>&1 | tee ios-check.log
+      - name: Show errors in the summary
+        if: always()
+        run: |
+          {
+            echo '### First errors'
+            echo '```'
+            grep -E 'error' ios-check.log | head -60
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
       - name: Upload log
         if: always()
         uses: actions/upload-artifact@v4

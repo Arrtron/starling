@@ -1,0 +1,29 @@
+name: iOS compile check
+on:
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: macos-15
+    timeout-minutes: 120
+    env:
+      CARGO_BUILD_JOBS: '3'
+      HORIZON_TELEMETRY_URL: 'off'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust toolchain and iOS target
+        run: |
+          rustup show
+          rustup target add aarch64-apple-ios
+      - name: Check the game for iOS
+        run: |
+          set -o pipefail
+          cargo check -p horizon-client --lib \
+            --target aarch64-apple-ios --no-default-features \
+            --message-format short 2>&1 | tee ios-check.log
+      - name: Upload log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-check-log
+          path: ios-check.log

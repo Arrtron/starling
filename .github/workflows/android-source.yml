@@ -59,6 +59,8 @@ jobs:
           rustup show
           rustup target add aarch64-apple-ios
       - name: Build the game for iOS
+        env:
+          IPHONEOS_DEPLOYMENT_TARGET: '15.0'
         run: |
           set -o pipefail
           cargo build -p horizon-client --bin horizon-client \

@@ -59,6 +59,68 @@ jobs:
           sub('crates/horizon-client-render/src/gfx.rs', [
               ('    if os == "macos" || wgpu_backend {', '    if os == "macos" || os == "ios" || wgpu_backend {', 1),
           ])
+          # First launch on iOS: install the game files (the Android installer) while a window keeps the app alive.
+          IOS_FN = r'''/// iOS: the game lives in Documents/horizon. When its files are not installed yet, download them
+          /// (official Mojang endpoints, as the Android build does) on a thread while a window keeps the app
+          /// alive; the process ends when the install does, and the next launch starts the game.
+          #[cfg(target_os = "ios")]
+          fn ios_prepare(home: &std::path::Path) -> bool {
+              use std::sync::atomic::{AtomicU64, Ordering};
+              let _ = std::fs::create_dir_all(home);
+              if let Err(e) = std::env::set_current_dir(home) {
+                  log::error!("Horizon iOS: cannot enter {}: {e}", home.display());
+              }
+              if horizon_client::official_install::ready(home) {
+                  log::info!("Horizon iOS: game files are installed");
+                  return true;
+              }
+              log::info!("Horizon iOS: installing the game files into {}", home.display());
+              let home = home.to_path_buf();
+              std::thread::spawn(move || {
+                  let last = AtomicU64::new(u64::MAX);
+                  let result = horizon_client::official_install::install_with_progress(&home, |p| {
+                      let bucket = (p.stage as u64) * 1000 + if p.total > 0 { p.done * 20 / p.total } else { 0 };
+                      if last.swap(bucket, Ordering::Relaxed) != bucket {
+                          log::info!("Horizon iOS install: {} ({}/{})", p.stage.label(), p.done, p.total);
+                          logging::flush();
+                      }
+                  });
+                  match result {
+                      Ok(()) => log::info!("Horizon iOS: install finished; open the app again to play"),
+                      Err(e) => log::error!("Horizon iOS: install failed: {e}"),
+                  }
+                  logging::flush();
+                  std::process::exit(0);
+              });
+              struct Keep(Option<winit::window::Window>);
+              impl winit::application::ApplicationHandler for Keep {
+                  fn resumed(&mut self, el: &winit::event_loop::ActiveEventLoop) {
+                      if self.0.is_none() {
+                          self.0 = el.create_window(winit::window::Window::default_attributes()).ok();
+                      }
+                  }
+                  fn window_event(
+                      &mut self,
+                      _: &winit::event_loop::ActiveEventLoop,
+                      _: winit::window::WindowId,
+                      _: winit::event::WindowEvent,
+                  ) {
+                  }
+              }
+              match winit::event_loop::EventLoop::new() {
+                  Ok(el) => {
+                      let _ = el.run_app(&mut Keep(None));
+                  }
+                  Err(e) => log::error!("Horizon iOS: no event loop: {e}"),
+              }
+              false
+          }
+          '''
+          sub('crates/horizon-client/src/main.rs', [
+              ('    raise_open_file_limit();\n',
+               '    raise_open_file_limit();\n    #[cfg(target_os = "ios")]\n    if !ios_prepare(&home) {\n        return;\n    }\n', 1),
+              ('/// The JVM raises its open-file limit', IOS_FN + '\n/// The JVM raises its open-file limit', 1),
+          ])
           print('iOS edits applied')
           PY_EOF
           git diff --stat

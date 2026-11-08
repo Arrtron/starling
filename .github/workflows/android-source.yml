@@ -131,6 +131,50 @@ jobs:
                '    raise_open_file_limit();\n    #[cfg(target_os = "ios")]\n    if !ios_prepare(&home) {\n        return;\n    }\n', 1),
               ('/// The JVM raises its open-file limit', IOS_FN + '\n/// The JVM raises its open-file limit', 1),
           ])
+          sub('crates/horizon-client/Cargo.toml', [
+              ('[dev-dependencies]\n', "[target.'cfg(target_os = \"ios\")'.dependencies]\nstacker = \"0.1\"\n\n[dev-dependencies]\n", 1),
+          ])
+          BIG_STACK = r'''#[cfg(target_os = "ios")]
+          struct BigStack<'a, H>(&'a mut H);
+          #[cfg(target_os = "ios")]
+          const BIG_STACK: usize = 32 * 1024 * 1024;
+          #[cfg(target_os = "ios")]
+          impl<H: ApplicationHandler> ApplicationHandler for BigStack<'_, H> {
+              fn new_events(&mut self, el: &ActiveEventLoop, cause: winit::event::StartCause) {
+                  stacker::grow(BIG_STACK, || self.0.new_events(el, cause))
+              }
+              fn resumed(&mut self, el: &ActiveEventLoop) {
+                  stacker::grow(BIG_STACK, || self.0.resumed(el))
+              }
+              fn user_event(&mut self, el: &ActiveEventLoop, event: ()) {
+                  stacker::grow(BIG_STACK, || self.0.user_event(el, event))
+              }
+              fn window_event(&mut self, el: &ActiveEventLoop, id: WindowId, event: WindowEvent) {
+                  stacker::grow(BIG_STACK, || self.0.window_event(el, id, event))
+              }
+              fn device_event(&mut self, el: &ActiveEventLoop, id: DeviceId, event: DeviceEvent) {
+                  stacker::grow(BIG_STACK, || self.0.device_event(el, id, event))
+              }
+              fn about_to_wait(&mut self, el: &ActiveEventLoop) {
+                  stacker::grow(BIG_STACK, || self.0.about_to_wait(el))
+              }
+              fn suspended(&mut self, el: &ActiveEventLoop) {
+                  stacker::grow(BIG_STACK, || self.0.suspended(el))
+              }
+              fn exiting(&mut self, el: &ActiveEventLoop) {
+                  stacker::grow(BIG_STACK, || self.0.exiting(el))
+              }
+              fn memory_warning(&mut self, el: &ActiveEventLoop) {
+                  stacker::grow(BIG_STACK, || self.0.memory_warning(el))
+              }
+          }
+
+          '''
+          sub('crates/horizon-client/src/game.rs', [
+              ('    let result = new_event_loop()?.run_app(&mut app);\n    narrator::stop();',
+               '    #[cfg(target_os = "ios")]\n    let result = new_event_loop()?.run_app(&mut BigStack(&mut app));\n    #[cfg(not(target_os = "ios"))]\n    let result = new_event_loop()?.run_app(&mut app);\n    narrator::stop();', 1),
+              ('fn new_event_loop() -> std::result::Result', BIG_STACK + 'fn new_event_loop() -> std::result::Result', 1),
+          ])
           print('iOS edits applied')
           PY_EOF
           git diff --stat

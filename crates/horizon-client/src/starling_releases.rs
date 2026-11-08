@@ -50,6 +50,10 @@ pub struct Update {
 pub fn update_in(latest: &serde_json::Value, current: &str) -> Option<Update> {
     let abi = if cfg!(target_arch = "arm") {
         "armeabi-v7a"
+    } else if cfg!(target_arch = "x86") {
+        "x86"
+    } else if cfg!(target_arch = "x86_64") {
+        "x86_64"
     } else {
         "arm64-v8a"
     };
@@ -172,6 +176,16 @@ mod tests {
 
     #[test]
     fn updates_select_the_process_abi_even_when_another_apk_is_listed_first() {
+        let all = json!({"tag_name":"v0.3.0", "assets":[
+            asset("starling-0.3.0-arm64-v8a.apk"), asset("starling-0.3.0-armeabi-v7a.apk"),
+            asset("starling-0.3.0-x86.apk"), asset("starling-0.3.0-x86_64.apk")
+        ]});
+        for abi in ["arm64-v8a", "armeabi-v7a", "x86", "x86_64"] {
+            assert_eq!(
+                update_for_abi(&all, "0.2.3", abi).unwrap().name,
+                format!("starling-0.3.0-{abi}.apk")
+            );
+        }
         let release = json!({"tag_name":"v0.3.0", "assets":[
             asset("starling-0.3.0-arm64-v8a.apk"), asset("starling-0.3.0-armeabi-v7a.apk")
         ]});

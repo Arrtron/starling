@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build Starling's arm64-v8a Android APK (Horizon on Android): horizon-android as a
+"""Build Starling's Android APK (Horizon on Android): horizon-android as a
 NativeActivity library.
 
 The APK holds the game library, the launcher icon, Starling Visuals and what prepares the game
@@ -51,6 +51,8 @@ TRIPLE = "aarch64-linux-android"
 TARGETS = {
     "arm64-v8a": (TRIPLE, TRIPLE, TRIPLE),
     "armeabi-v7a": ("armv7-linux-androideabi", "armv7a-linux-androideabi", "arm-linux-androideabi"),
+    "x86": ("i686-linux-android", "i686-linux-android", "i686-linux-android"),
+    "x86_64": ("x86_64-linux-android", "x86_64-linux-android", "x86_64-linux-android"),
 }
 LIBRARY = "horizon_android"
 # Every LOAD segment aligned for 16 KB pages, which Android 15 devices may use.
@@ -183,8 +185,8 @@ def link_resources(aapt2, android_jar, out, assets, variant, abi=ABI):
     application_id = APPLICATION_ID + suffix
     label = LABEL + label_suffix
     manifest = manifest.replace("@APPLICATION_ID@", application_id).replace("@LABEL@", label)
-    if abi == "armeabi-v7a":
-        # ARMv7 devices may expose GLES only. The renderer validates actual GPU limits.
+    if abi != ABI:
+        # Additional architectures may expose GLES only. Validate actual GPU limits.
         manifest = manifest.replace('android:version="0x400003" android:required="true"',
                                     'android:version="0x400003" android:required="false"')
     (out / "AndroidManifest.xml").write_text(manifest, encoding="utf-8")

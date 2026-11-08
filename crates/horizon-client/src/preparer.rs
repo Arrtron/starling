@@ -3,10 +3,6 @@
 //! the preparer's kit the app carries (`assets/prepare-kit.zip`, build_apk.py), then
 //! horizon-prepare over those files with the app's Java launchers. What it makes becomes the
 //! game's resources folder; the runtime goes once it is done.
-#[cfg(target_arch = "arm")]
-use starling_account::java::JRE25_ANDROID_ARM as RUNTIME;
-#[cfg(not(target_arch = "arm"))]
-use starling_account::java::JRE25_ANDROID_ARM64 as RUNTIME;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard, OnceLock, PoisonError};
 
@@ -63,6 +59,10 @@ fn home() -> PathBuf {
 /// Prepare the fetched files into `resources` (the folder the game reads), on a thread of its
 /// own; `stage` follows it.
 pub fn start(resources: PathBuf) {
+    let Some(runtime) = starling_account::java::android_runtime(std::env::consts::ARCH) else {
+        *shared() = Stage::Failed("On 32-bit x86, import prepared resources as a .starling file. An Android x86 Java 25 runtime is not available.".into());
+        return;
+    };
     {
         let mut stage = shared();
         if matches!(
@@ -71,7 +71,7 @@ pub fn start(resources: PathBuf) {
         ) {
             return;
         }
-        *stage = Stage::Java(0, RUNTIME.size);
+        *stage = Stage::Java(0, runtime.size);
     }
     let spawned = std::thread::Builder::new()
         .name("preparer".into())
@@ -98,13 +98,15 @@ pub fn start(resources: PathBuf) {
 }
 
 fn run(resources: &Path) -> Result<(), String> {
+    let runtime = starling_account::java::android_runtime(std::env::consts::ARCH)
+        .ok_or("No Java runtime is available for this architecture.")?;
     let server_jar = crate::accounts::server_jar()
         .ok_or("The game files are not all there: download them again.")?;
     let library = crate::platform::library_dir().ok_or("Starling cannot find its own files.")?;
     let home = home();
     let jre = home.join("jre25");
     starling_account::java::install(
-        &RUNTIME,
+        runtime,
         &jre,
         &|done, total| {
             *shared() = if done >= total {

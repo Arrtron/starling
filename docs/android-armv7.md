@@ -1,4 +1,13 @@
-# Android ARMv7 builds
+# Android architectures
+
+The same ABI selection supports `x86` and `x86_64`, adapted from the Android
+fork's four-ABI build. Their native launchers, C++ libraries and updater APK
+selection match the selected ABI. CI builds each ABI separately.
+Android x86_64 uses the pinned x86_64 Java 25 runtime. The runtime publisher
+does not provide Android x86 Java 25: 32-bit x86 uses imported prepared `.starling`
+resources, as the Android fork's prepared-resource approach did. On-device
+preparation reports this limitation instead of downloading an ARM runtime.
+The x86 architectures have not been tested on a physical device.
 
 The release APK remains ARM64. ARMv7 builds use `armeabi-v7a` and require Android
 8 or newer. CPU ABI support alone does not guarantee that a device's graphics
@@ -31,7 +40,7 @@ apply only to GLES; the Vulkan WGSL remains byte-for-byte unchanged.
 The Android fork's fallback for adapters without `BASE_VERTEX` rebases the
 vertex-buffer binding and draws with a zero base vertex. It applies to both
 opaque and translucent terrain, retaining Starling's bounded arena bindings.
-Vulkan is optional in the ARMv7 manifest so a GLES-only device can attempt to
+Vulkan is optional in the additional-ABI manifests so a GLES-only device can attempt to
 start; this does not guarantee support for every GLES driver. Actual API,
 texture-array and shader limits remain authoritative.
 

@@ -154,11 +154,18 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: gh workflow run native-mods.yml -R "$GITHUB_REPOSITORY" --ref android -f version="${GITHUB_REF_NAME#v}"
 
-  armv7:
+  additional-abis:
     # Additional ABI: validate PRs and manual builds without publishing a release.
     if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 150
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { abi: armeabi-v7a, target: armv7-linux-androideabi }
+          - { abi: x86, target: i686-linux-android }
+          - { abi: x86_64, target: x86_64-linux-android }
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -168,16 +175,16 @@ jobs:
         with:
           distribution: temurin
           java-version: '21'
-      - name: Install Android SDK and ARMv7 toolchain
+      - name: Install Android SDK and target toolchain
         run: |
           yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install \
             "build-tools;35.0.0" "platforms;android-36" "ndk;28.2.13676358" > /dev/null
-          rustup toolchain install stable --profile minimal --target armv7-linux-androideabi
+          rustup toolchain install stable --profile minimal --target ${{ matrix.target }}
           rustup default stable
           cargo install cargo-ndk --version 3.5.4 --locked
       - uses: Swatinem/rust-cache@v2
         with:
-          shared-key: android-armv7
+          shared-key: android-${{ matrix.abi }}
       - name: Unpack the preview debug key
         env:
           KEYSTORE: ${{ secrets.STARLING_DEBUG_KEYSTORE_BASE64 }}
@@ -185,9 +192,9 @@ jobs:
           test -n "$KEYSTORE" || exit 0
           mkdir -p target/android
           echo "$KEYSTORE" | base64 -d > target/android/debug.keystore
-      - name: Build ARMv7 APK
-        run: python packaging/android/build_apk.py --abi armeabi-v7a --preview
+      - name: Build architecture APK
+        run: python packaging/android/build_apk.py --abi ${{ matrix.abi }} --preview
       - uses: actions/upload-artifact@v4
         with:
-          name: starling-armv7-apk
-          path: target/android/starling-*-armeabi-v7a.apk
+          name: starling-${{ matrix.abi }}-apk
+          path: target/android/starling-*-${{ matrix.abi }}.apk

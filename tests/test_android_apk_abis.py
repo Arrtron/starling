@@ -13,7 +13,7 @@ spec.loader.exec_module(apk)
 
 class ApkAbis(unittest.TestCase):
     def test_native_libraries_are_packaged_only_under_the_selected_abi(self):
-        for abi in ("arm64-v8a", "armeabi-v7a"):
+        for abi in ("arm64-v8a", "armeabi-v7a", "x86", "x86_64"):
             with self.subTest(abi=abi), tempfile.TemporaryDirectory() as folder:
                 root = Path(folder)
                 base, output = root / "base.apk", root / "output.apk"

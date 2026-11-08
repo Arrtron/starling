@@ -1062,6 +1062,7 @@ pub struct Renderer {
     indirect_capacity: u64,
     /// Indirect draws may set `first_instance` (the section origin).
     pub multi_draw: bool,
+    base_vertex: bool,
     /// Per-frame scratch, kept to avoid allocating every frame.
     visible: Vec<resident::Visible>,
     visible_lods: Vec<lod::Visible>,
@@ -3928,6 +3929,10 @@ impl Renderer {
                 },
             )
         });
+        let base_vertex = adapter
+            .get_downlevel_capabilities()
+            .flags
+            .contains(wgpu::DownlevelFlags::BASE_VERTEX);
         let multi_draw = device
             .features()
             .contains(wgpu::Features::INDIRECT_FIRST_INSTANCE)
@@ -4178,6 +4183,7 @@ impl Renderer {
             indirect,
             indirect_capacity: 1024,
             multi_draw,
+            base_vertex,
             visible: Vec::new(),
             visible_lods: Vec::new(),
             shadow_visible: Vec::new(),
@@ -4821,7 +4827,15 @@ impl Renderer {
             };
             pass.set_vertex_buffer(0, vertices);
             pass.set_index_buffer(indices, wgpu::IndexFormat::Uint32);
-            if self.multi_draw {
+            if !self.base_vertex {
+                // Android fork fallback: GLES 3.0 has no base-vertex draws.
+                // Rebase the selected arena's bounded binding instead.
+                for d in &draws[i..i + run] {
+                    let offset = u64::from(d[3]) * std::mem::size_of::<TerrainVertex>() as u64;
+                    pass.set_vertex_buffer(0, vertices.slice(offset..));
+                    pass.draw_indexed(d[2]..d[2] + d[0], 0, d[4]..d[4] + 1);
+                }
+            } else if self.multi_draw {
                 let offset = (i - base as usize) as u64 * 20;
                 pass.multi_draw_indexed_indirect(indirect, offset, run as u32);
             } else {

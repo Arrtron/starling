@@ -155,7 +155,7 @@ jobs:
         run: gh workflow run native-mods.yml -R "$GITHUB_REPOSITORY" --ref android -f version="${GITHUB_REF_NAME#v}"
 
   armv7:
-    # Experimental ABI: validate PRs and manual builds without publishing a release.
+    # Additional ABI: validate PRs and manual builds without publishing a release.
     if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 150
@@ -185,7 +185,7 @@ jobs:
           test -n "$KEYSTORE" || exit 0
           mkdir -p target/android
           echo "$KEYSTORE" | base64 -d > target/android/debug.keystore
-      - name: Build experimental ARMv7 APK
+      - name: Build ARMv7 APK
         run: python packaging/android/build_apk.py --abi armeabi-v7a --preview
       - uses: actions/upload-artifact@v4
         with:

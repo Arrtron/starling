@@ -1,4 +1,4 @@
-# Experimental Android ARMv7 builds
+# Android ARMv7 builds
 
 The release APK remains ARM64. ARMv7 builds use `armeabi-v7a` and require Android
 8 or newer. CPU ABI support alone does not guarantee that a device's graphics
@@ -17,7 +17,7 @@ python packaging/android/build_apk.py --abi armeabi-v7a --dev
 `--abi arm64-v8a` preserves the default build. Each APK contains only its selected
 ABI. The ARMv7 Java launchers and C++ runtime are 32-bit, and resource preparation
 selects the pinned Android ARM32 OpenJDK 25 archive with SHA-256 verification.
-The PR workflow builds ARMv7 as a separate experimental artifact; this does not
+The PR workflow builds ARMv7 as a separate artifact; this does not
 publish an ARMv7 release or replace the ARM64 release job.
 
 ## Graphics and address space
@@ -28,6 +28,9 @@ sprite selection, unrolled RGSS/overlay/emissive lookups, packed terrain varying
 and conditional HDR texture selection. Starling's tiled-face RGSS behavior, HDR
 scene varying and all 128 emissive entries are preserved. These transformations
 apply only to GLES; the Vulkan WGSL remains byte-for-byte unchanged.
+The Android fork's fallback for adapters without `BASE_VERTEX` rebases the
+vertex-buffer binding and draws with a zero base vertex. It applies to both
+opaque and translucent terrain, retaining Starling's bounded arena bindings.
 Vulkan is optional in the ARMv7 manifest so a GLES-only device can attempt to
 start; this does not guarantee support for every GLES driver. Actual API,
 texture-array and shader limits remain authoritative.

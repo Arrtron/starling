@@ -59,7 +59,7 @@ import javax.crypto.spec.GCMParameterSpec;
  * file picker, the clipboard, the keyboard's editor (TextMirror), the browser, the keystore, the
  * mouse's capture and the controllers' makers and motors.
  */
-public final class StarlingActivity extends NativeActivity {
+public class StarlingActivity extends NativeActivity {
     private static final int PICK_FILE = 1;
     /** Horizon Android's folder picked: its worlds and packs come over (HorizonImport). */
     private static final int PICK_HORIZON = 2;

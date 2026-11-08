@@ -53,11 +53,6 @@
             android:excludeFromRecents="true"
             android:noHistory="true"
             android:theme="@android:style/Theme.Translucent.NoTitleBar">
-            <meta-data android:name="android.app.shortcuts" android:resource="@xml/shortcuts" />
-            <intent-filter>
-                <action android:name="android.intent.action.MAIN" />
-                <category android:name="android.intent.category.LAUNCHER" />
-            </intent-filter>
             <!-- Packs, worlds, shader packs, mods and prepared resources as .zip, opened with
                  or shared to Starling. -->
             <intent-filter>
@@ -98,8 +93,18 @@
                 <data android:mimeType="application/octet-stream" />
             </intent-filter>
         </activity>
+        <!-- Keep the 0.2.3 home-screen component, but route before native loading. -->
+        <activity-alias android:name="io.github.juanluci.starling.StarlingActivity"
+            android:targetActivity="io.github.juanluci.starling.LauncherActivity"
+            android:exported="true">
+            <meta-data android:name="android.app.shortcuts" android:resource="@xml/shortcuts" />
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
         <activity
-            android:name="io.github.juanluci.starling.StarlingActivity"
+            android:name="io.github.juanluci.starling.GameActivity"
             android:exported="true"
             android:launchMode="singleTask"
             android:screenOrientation="sensorLandscape"

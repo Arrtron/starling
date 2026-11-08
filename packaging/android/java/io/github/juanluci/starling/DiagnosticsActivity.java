@@ -26,6 +26,8 @@ public final class DiagnosticsActivity extends Activity {
     private TextView status;
     private final ArrayList<Button> actions = new ArrayList<Button>();
     private String latest;
+    private boolean recovery;
+    private int intro;
     private Typeface regular, semibold;
     private int color(int id) { return getResources().getColor(id, getTheme()); }
     private int dp(float value) { return (int) (value * getResources().getDisplayMetrics().density + .5f); }
@@ -47,6 +49,8 @@ public final class DiagnosticsActivity extends Activity {
 
     @Override public void onCreate(Bundle saved) {
         super.onCreate(saved);
+        recovery = getIntent().getBooleanExtra(StartupRecovery.RECOVERY, false);
+        intro = recovery ? R.string.diagnostics_recovery_intro : R.string.diagnostics_intro;
         regular = Typeface.createFromAsset(getAssets(), "diagnostic-fonts/Geist-Regular.ttf");
         semibold = Typeface.createFromAsset(getAssets(), "diagnostic-fonts/Geist-SemiBold.ttf");
         FrameLayout backdrop = new FrameLayout(this);
@@ -68,8 +72,15 @@ public final class DiagnosticsActivity extends Activity {
         status.setTextColor(color(R.color.starling_ink_soft));
         status.setTypeface(regular);
         status.setPadding(0, dp(18), 0, dp(18));
-        status.setText(R.string.diagnostics_intro);
+        status.setText(intro);
         root.addView(status);
+        View.OnClickListener retry = new View.OnClickListener() {
+            @Override public void onClick(View view) {
+                startActivity(new Intent(DiagnosticsActivity.this, GameActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+                finish();
+            }
+        };
+        if (recovery) add(row(root), R.string.diagnostics_start, retry);
         LinearLayout reports = row(root);
         add(reports, R.string.diagnostics_view_log, new View.OnClickListener() {
             @Override public void onClick(View view) { report(false); }
@@ -81,12 +92,7 @@ public final class DiagnosticsActivity extends Activity {
         add(launching, R.string.diagnostics_share, new View.OnClickListener() {
             @Override public void onClick(View view) { share(); }
         });
-        add(launching, R.string.diagnostics_start, new View.OnClickListener() {
-            @Override public void onClick(View view) {
-                startActivity(new Intent(DiagnosticsActivity.this, StarlingActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
-                finish();
-            }
-        });
+        if (!recovery) add(launching, R.string.diagnostics_start, retry);
         add(row(root), R.string.diagnostics_close, new View.OnClickListener() {
             @Override public void onClick(View view) { finish(); }
         });
@@ -96,6 +102,7 @@ public final class DiagnosticsActivity extends Activity {
         FrameLayout.LayoutParams card = new FrameLayout.LayoutParams(Math.min(dp(520), available), -2, Gravity.CENTER);
         backdrop.addView(page, card);
         setContentView(backdrop);
+        if (recovery) StartupRecovery.offered(this);
         File[] files = new File(getFilesDir(), "performance").listFiles();
         if (files != null) for (File file : files) {
             if (file.isFile() && file.getName().matches("starling-diagnostics-[0-9]+\\.zip")
@@ -111,7 +118,7 @@ public final class DiagnosticsActivity extends Activity {
         button.setMinHeight(dp(40));
         button.setMinimumHeight(dp(40));
         button.setPadding(dp(12), dp(8), dp(12), dp(8));
-        boolean primary = text == R.string.diagnostics_export;
+        boolean primary = text == (recovery ? R.string.diagnostics_start : R.string.diagnostics_export);
         int ink = color(primary ? R.color.starling_on_accent : R.color.starling_ink);
         button.setTextColor(new ColorStateList(new int[][] {new int[] {-android.R.attr.state_enabled}, new int[] {}}, new int[] {(ink & 0xffffff) | 0x66000000, ink}));
         int fill = primary ? color(R.color.starling_accent) : ((color(R.color.starling_ink) & 0xffffff) | 0x14000000);
@@ -147,7 +154,7 @@ public final class DiagnosticsActivity extends Activity {
                                 status.setText(R.string.diagnostics_exported);
                             } else {
                                 showLog(result);
-                                status.setText(R.string.diagnostics_intro);
+                                status.setText(intro);
                             }
                         }
                     });

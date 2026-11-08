@@ -218,4 +218,5 @@ fa548eb7abe91c194d3780e4580b9746323cd606](https://github.com/Vasysik/horizon-and
 under the MIT license (the same [LICENSE](LICENSE) as this repository).
 Copyright (c) 2026 Ludovic Marie and the Horizon contributors.
 The port uses Starling's existing logger, crash hook and GPU timers and exposes
-reports through the game's Diagnostics settings instead of the Android launcher.
+reports through the game's Diagnostics settings and an Android launcher shortcut,
+with a renderer-independent recovery window for interrupted startup.

@@ -207,7 +207,7 @@ pub fn summary(home: &Path) -> String {
         .ok()
         .and_then(|b| serde_json::from_slice::<Value>(&b).ok());
     match previous {
-        Some(v) if v["clean_exit"] != true => format!("Previous session ended without a clean exit; last phase: {}. This may be a crash or an Android process kill. Export diagnostics before reporting.", v["phase"].as_str().unwrap_or("unknown")),
+        Some(v) if v["clean_exit"] != true => format!("No completion record for the previous session; last phase: {}. Android may stop background apps without a completion record. This alone does not indicate a crash.", v["phase"].as_str().unwrap_or("unknown")),
         _ => "Export one diagnostic ZIP to send with your report. It includes local logs, Android exit history and retained performance recordings. Review before sharing.".into(),
     }
 }

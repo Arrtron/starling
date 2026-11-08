@@ -52,6 +52,10 @@ jobs:
               ('#[cfg(not(any(target_os = "windows", target_os = "macos")))]\nconst NO_GPU_DRIVER', '#[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "ios")))]\nconst NO_GPU_DRIVER', 1),
           ])
           print('iOS edits applied')
+          sub('crates/horizon-client-render/src/logging.rs', [
+              ('    } else if cfg!(target_os = "macos") {\n        if let Some(h) = &home {\n            return h.join("Library/Application Support");',
+               '    } else if cfg!(target_os = "ios") {\n        if let Some(h) = &home {\n            return h.join("Documents");\n        }\n    } else if cfg!(target_os = "macos") {\n        if let Some(h) = &home {\n            return h.join("Library/Application Support");', 1),
+          ])
           PY_EOF
           git diff --stat
       - name: Install Rust toolchain and iOS target

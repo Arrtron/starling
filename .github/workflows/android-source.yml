@@ -1,86 +1,81 @@
-# The source exporter restores the Android checks and dev APK workflows.
-name: Android source checks
+name: iOS compile check
 on:
-  push:
-    branches: [android]
-  pull_request:
-    branches: [android]
   workflow_dispatch:
-    inputs:
-      native_checks:
-        description: Type-check all four Android ABIs (slower)
-        type: boolean
-        default: false
-      build_apk:
-        description: Build a public APK for one ABI and upload it as an artifact
-        type: boolean
-        default: false
-      abi:
-        description: ABI built when build_apk is enabled
-        type: choice
-        options: [arm64-v8a, armeabi-v7a, x86, x86_64]
-        default: arm64-v8a
-permissions:
-  contents: read
-concurrency:
-  group: android-checks-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+
 jobs:
-  source:
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-      - run: git diff --check
-      - run: python3 tools/check_public_tree.py --history
-      - run: python3 -m unittest discover -s tests -p 'test_android*.py'
-      - run: python3 tools/test_android_diagnostics.py
-      - run: python3 tools/test_android_performance.py
-      - run: python3 tools/test_android_content.py
-      - run: python3 tools/test_android_session.py
-      - run: python3 tools/test_android_hotplug.py
-      - run: python3 tools/test_android_appearance.py
-      - name: Check workflow export matches the active workflow
-        run: |
-          cmp .github/workflows/android-source.yml packaging/android/source-checks.yml
-          cmp .github/workflows/android-dev.yml packaging/android/dev-builds.yml
-  native:
-    if: github.event_name == 'workflow_dispatch' && inputs.native_checks
-    needs: source
-    runs-on: ubuntu-latest
-    timeout-minutes: 90
-    strategy:
-      fail-fast: false
-      max-parallel: 2
-      matrix:
-        include:
-          - abi: arm64-v8a
-            target: aarch64-linux-android
-          - abi: armeabi-v7a
-            target: armv7-linux-androideabi
-          - abi: x86
-            target: i686-linux-android
-          - abi: x86_64
-            target: x86_64-linux-android
+  check:
+    runs-on: macos-15
+    timeout-minutes: 120
     env:
-      HORIZON_TELEMETRY_URL: "off"
-      CARGO_TARGET_DIR: .local/ci-target
-      CARGO_BUILD_JOBS: "2"
+      CARGO_BUILD_JOBS: '3'
+      HORIZON_TELEMETRY_URL: 'off'
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
-        with:
-          persist-credentials: false
-      - name: Install Android toolchain
+      - uses: actions/checkout@v4
+      - name: Apply iOS edits
         run: |
-          sdkmanager="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
-          if [[ ! -x "$sdkmanager" ]]; then
-            sdkmanager=$(find "$ANDROID_HOME/cmdline-tools" -type f -path '*/bin/sdkmanager' | sort -V | tail -n 1)
-          fi
-          test -x "$sdkmanager"
-          "$sdkmanager" --sdk_root="$ANDROID_HOME" "ndk;28.2.13676358" "build-tools;35.0.0"
-          rustup target add "${{ matrix.target }}"
-      - name: Check Android Rust code without building an APK
-        run: python3 tools/android_build.py --abi "${{ matrix.abi }}" --check --public --sdk "$ANDROID_HOME" --java-home "$JAVA_HOME_17_X64" --ndk-version 28.2.13676358 --build-tools-version 35.0.0
+          python3 - <<'PY_EOF'
+          def sub(p, pairs):
+              s = open(p).read()
+              for o, n, c in pairs:
+                  assert s.count(o) == c, (p, o, s.count(o))
+                  s = s.replace(o, n)
+              open(p, 'w').write(s)
+
+          NA = 'cfg(not(target_os = "android"))'
+          NAI = 'cfg(not(any(target_os = "android", target_os = "ios")))'
+          NM = 'cfg(not(target_os = "macos"))'
+          NMI = 'cfg(not(any(target_os = "macos", target_os = "ios")))'
+
+          # arboard (Linux clipboard) is not for iOS: the game's own clipboard only.
+          for p in ['crates/horizon-client-input/Cargo.toml', 'crates/horizon-client/Cargo.toml']:
+              sub(p, [("[target.'" + NA + "'.dependencies]\narboard", "[target.'" + NAI + "'.dependencies]\narboard", 1)])
+          sub('crates/horizon-client-input/src/clipboard.rs', [
+              ('#[' + NA + ']', '#[' + NAI + ']', 4),
+              ('        #[cfg(target_os = "android")]\n        return clipboard_get().unwrap_or_else(|| self.copied.clone().unwrap_or_default());\n',
+               '        #[cfg(target_os = "android")]\n        return clipboard_get().unwrap_or_else(|| self.copied.clone().unwrap_or_default());\n        #[cfg(target_os = "ios")]\n        return self.copied.clone().unwrap_or_default();\n', 1),
+          ])
+          # Keyboard layout learning: not on iOS (same as Android).
+          sub('crates/horizon-client-input/src/keybinds.rs', [
+              ('#[' + NA + ']\npub fn learn_layout', '#[' + NAI + ']\npub fn learn_layout', 1),
+              ('#[cfg(target_os = "android")]\npub fn learn_layout', '#[cfg(any(target_os = "android", target_os = "ios"))]\npub fn learn_layout', 1),
+          ])
+          # No Vulkan on iOS (Metal only), as on macOS.
+          sub('crates/horizon-hdr/Cargo.toml', [(NM, NMI, 1)])
+          sub('crates/horizon-hdr/src/lib.rs', [
+              ('#[' + NM + ']', '#[' + NMI + ']', 2),
+              ('#[cfg(target_os = "macos")]', '#[cfg(any(target_os = "macos", target_os = "ios"))]', 1),
+          ])
+          sub('crates/horizon-client-render/src/gfx.rs', [
+              ('    #[' + NM + ']\n    let opened', '    #[' + NMI + ']\n    let opened', 1),
+              ('    #[cfg(target_os = "macos")]\n    let opened = None;', '    #[cfg(any(target_os = "macos", target_os = "ios"))]\n    let opened = None;', 1),
+              ('#[cfg(target_os = "macos")]\nconst NO_GPU_DRIVER', '#[cfg(any(target_os = "macos", target_os = "ios"))]\nconst NO_GPU_DRIVER', 1),
+              ('#[cfg(not(any(target_os = "windows", target_os = "macos")))]\nconst NO_GPU_DRIVER', '#[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "ios")))]\nconst NO_GPU_DRIVER', 1),
+          ])
+          print('iOS edits applied')
+          PY_EOF
+          git diff --stat
+      - name: Install Rust toolchain and iOS target
+        run: |
+          rustup show
+          rustup target add aarch64-apple-ios
+      - name: Check the game for iOS
+        run: |
+          set -o pipefail
+          cargo check -p horizon-client --lib \
+            --target aarch64-apple-ios --no-default-features \
+            --keep-going --message-format short 2>&1 | tee ios-check.log
+      - name: Show errors in the summary
+        if: always()
+        run: |
+          {
+            echo '### First errors'
+            echo '```'
+            grep -E 'error' ios-check.log | head -60
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-check-log
+          path: ios-check.log

@@ -46,25 +46,6 @@ pub fn android_runtime(arch: &str) -> Option<&'static Runtime> {
     }
 }
 
-#[cfg(test)]
-mod architecture_tests {
-    use super::*;
-
-    #[test]
-    fn runtime_downloads_match_the_process_and_never_substitute_another_cpu() {
-        for (arch, suffix) in [("arm", "arm"), ("aarch64", "arm64"), ("x86_64", "x86_64")] {
-            assert!(
-                android_runtime(arch)
-                    .unwrap()
-                    .url
-                    .ends_with(&format!("jre25-android-{suffix}.tar.xz"))
-            );
-        }
-        assert!(android_runtime("x86").is_none());
-        assert!(android_runtime("unknown").is_none());
-    }
-}
-
 /// Written in the runtime's folder once it is unpacked: the archive's hash.
 const INSTALLED: &str = ".starling-runtime";
 
@@ -342,5 +323,24 @@ mod tests {
         assert!(err.contains("names"), "{err}");
         assert!(!dir.join("escape").exists() && !dir.join("jre").exists());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[cfg(test)]
+mod architecture_tests {
+    use super::*;
+
+    #[test]
+    fn runtime_downloads_match_the_process_and_never_substitute_another_cpu() {
+        for (arch, suffix) in [("arm", "arm"), ("aarch64", "arm64"), ("x86_64", "x86_64")] {
+            assert!(
+                android_runtime(arch)
+                    .unwrap()
+                    .url
+                    .ends_with(&format!("jre25-android-{suffix}.tar.xz"))
+            );
+        }
+        assert!(android_runtime("x86").is_none());
+        assert!(android_runtime("unknown").is_none());
     }
 }

@@ -61,7 +61,7 @@ jobs:
       - name: Check the game for iOS
         run: |
           set -o pipefail
-          cargo check -p horizon-client --lib \
+          cargo check -p horizon-client --bin horizon-client \
             --target aarch64-apple-ios --no-default-features \
             --keep-going --message-format short 2>&1 | tee ios-check.log
       - name: Show errors in the summary

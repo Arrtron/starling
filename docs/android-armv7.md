@@ -9,7 +9,9 @@ resources, as the Android fork's prepared-resource approach did. On-device
 preparation reports this limitation instead of downloading an ARM runtime.
 The x86 architectures have not been tested on a physical device.
 
-The release APK remains ARM64. ARMv7 builds use `armeabi-v7a` and require Android
+ARM64, ARMv7, x86 and x86_64 share the same build/sign/release matrix. Each is
+published as a separate APK; release publication waits for all four builds.
+ARMv7 builds use `armeabi-v7a` and require Android
 8 or newer. CPU ABI support alone does not guarantee that a device's graphics
 driver can run the engine. Older PowerVR/Mali/Adreno hardware needs separate
 on-device validation; a successful run on a modern tablet is not evidence for it.
@@ -26,8 +28,13 @@ python packaging/android/build_apk.py --abi armeabi-v7a --dev
 `--abi arm64-v8a` preserves the default build. Each APK contains only its selected
 ABI. The ARMv7 Java launchers and C++ runtime are 32-bit, and resource preparation
 selects the pinned Android ARM32 OpenJDK 25 archive with SHA-256 verification.
-The PR workflow builds ARMv7 as a separate artifact; this does not
-publish an ARMv7 release or replace the ARM64 release job.
+Every architecture follows the same Preview/debug/release signing rules and
+profile selection. Tagged releases are published once, with all four APKs and
+one shared Starling Visuals archive, only in the existing release repository.
+PR and fork builds never publish releases. ARM64 is only the local command's
+default ABI. Manual native-mod APK builds also receive the selected ABI and
+variant, with separate build caches for each architecture; the separate native-mod
+prebuilt-library service retains its existing scope.
 
 ## Graphics and address space
 

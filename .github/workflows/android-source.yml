@@ -63,7 +63,7 @@ jobs:
           set -o pipefail
           cargo build -p horizon-client --bin horizon-client \
             --profile fast --target aarch64-apple-ios --no-default-features \
-            --keep-going --message-format short 2>&1 | tee ios-build.log
+            --keep-going 2>&1 | tee ios-build.log
       - name: Package an unsigned IPA
         run: |
           set -e
@@ -106,7 +106,7 @@ jobs:
           {
             echo '### First errors'
             echo '```'
-            grep -E '(^error|error\[)' ios-build.log | head -60
+            grep -n -E -A4 'ld: |Undefined symbols|duplicate symbol|linking with' ios-build.log | head -120
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
       - name: Upload the IPA

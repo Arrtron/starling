@@ -67,6 +67,15 @@ jobs:
           fn ios_prepare(home: &std::path::Path) -> bool {
               use std::sync::atomic::{AtomicU64, Ordering};
               let _ = std::fs::create_dir_all(home);
+              // Old logs are packed to *.log.gz at start: delete them, keep only latest.log.
+              if let Ok(entries) = std::fs::read_dir(home.join("logs")) {
+                  for entry in entries.flatten() {
+                      let path = entry.path();
+                      if path.extension().is_some_and(|x| x == "gz") {
+                          let _ = std::fs::remove_file(path);
+                      }
+                  }
+              }
               if let Err(e) = std::env::set_current_dir(home) {
                   log::error!("Horizon iOS: cannot enter {}: {e}", home.display());
               }
@@ -146,6 +155,10 @@ jobs:
                   stacker::grow(BIG_STACK, || self.0.new_events(el, cause))
               }
               fn resumed(&mut self, el: &ActiveEventLoop) {
+                  if let Some(m) = el.primary_monitor() {
+                      let size = m.size();
+                      log::info!("Horizon iOS: monitor {}x{} scale {}", size.width, size.height, m.scale_factor());
+                  }
                   stacker::grow(BIG_STACK, || self.0.resumed(el))
               }
               fn user_event(&mut self, el: &ActiveEventLoop, event: ()) {

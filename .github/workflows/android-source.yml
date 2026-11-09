@@ -332,6 +332,7 @@ jobs:
                   if let Some(m) = el.primary_monitor() {
                       let size = m.size();
                       log::info!("Horizon iOS: monitor {}x{} scale {}", size.width, size.height, m.scale_factor());
+                      ios_touch::set_size(size.width.max(size.height) as f32, size.width.min(size.height) as f32);
                   }
                   stacker::grow(BIG_STACK, || self.0.resumed(el))
               }
@@ -342,12 +343,18 @@ jobs:
                   use winit::event::TouchPhase;
                   if let WindowEvent::Resized(s) = &event {
                       log::info!("Horizon iOS: window resized to {}x{}", s.width, s.height);
+                      ios_touch::set_size(s.width as f32, s.height as f32);
                   }
                   if let WindowEvent::ScaleFactorChanged { scale_factor, .. } = &event {
                       log::info!("Horizon iOS: scale factor {scale_factor}");
                   }
                   // iOS only sends touches: the first finger acts as the mouse (menus).
                   let events = match event {
+                      WindowEvent::Touch(t)
+                          if ios_touch::touch(t.id, t.phase, t.location.x as f32, t.location.y as f32) =>
+                      {
+                          Vec::new()
+                      }
                       WindowEvent::Touch(t) => {
                           let (device_id, position) = (t.device_id, t.location);
                           let moved = WindowEvent::CursorMoved { device_id, position };
@@ -422,6 +429,256 @@ jobs:
 
                   // The game asks for 854x480; on a phone that is bigger than the screen: always fill it.
                   let frame = match None::<crate::dpi::Size> {''', 1),
+          ])
+          # On-screen controls: the fingers are a virtual game pad (the game plays with a pad already).
+          IOS_TOUCH = r'''//! iOS: on-screen controls. Fingers become a virtual game pad, which the game already plays with:
+          //! the left thumb moves, the right thumb turns the view, buttons are drawn on the screen.
+          use horizon_client::gamepad::{Button, PadState};
+          use horizon_client::hud::{HudAtlas, HudBatch, rgba};
+          use std::sync::Mutex;
+          use winit::event::TouchPhase;
+
+          #[derive(Clone, Copy)]
+          enum Kind {
+              Pad(Button),
+              Trigger(usize),
+          }
+
+          struct Btn {
+              label: &'static str,
+              /// Centre as a fraction of the width and of the height.
+              x: f32,
+              y: f32,
+              /// Radius as a fraction of the height.
+              r: f32,
+              kind: Kind,
+              menu: bool,
+          }
+
+          const BTNS: [Btn; 12] = [
+              Btn { label: "JUMP", x: 0.90, y: 0.52, r: 0.10, kind: Kind::Pad(Button::South), menu: false },
+              Btn { label: "HIT", x: 0.74, y: 0.78, r: 0.11, kind: Kind::Trigger(1), menu: false },
+              Btn { label: "USE", x: 0.91, y: 0.80, r: 0.11, kind: Kind::Trigger(0), menu: false },
+              Btn { label: "SNEAK", x: 0.50, y: 0.88, r: 0.08, kind: Kind::Pad(Button::RightStick), menu: false },
+              Btn { label: "INV", x: 0.60, y: 0.10, r: 0.07, kind: Kind::Pad(Button::North), menu: false },
+              Btn { label: "MENU", x: 0.50, y: 0.10, r: 0.07, kind: Kind::Pad(Button::Start), menu: false },
+              Btn { label: "<", x: 0.30, y: 0.10, r: 0.07, kind: Kind::Pad(Button::LeftBumper), menu: false },
+              Btn { label: ">", x: 0.70, y: 0.10, r: 0.07, kind: Kind::Pad(Button::RightBumper), menu: false },
+              Btn { label: "CHAT", x: 0.40, y: 0.10, r: 0.07, kind: Kind::Pad(Button::DPadRight), menu: false },
+              Btn { label: "VIEW", x: 0.80, y: 0.10, r: 0.07, kind: Kind::Pad(Button::DPadUp), menu: false },
+              Btn { label: "DROP", x: 0.90, y: 0.10, r: 0.07, kind: Kind::Pad(Button::East), menu: false },
+              Btn { label: "BACK", x: 0.07, y: 0.11, r: 0.08, kind: Kind::Pad(Button::East), menu: true },
+          ];
+
+          #[derive(Clone, Copy, PartialEq)]
+          enum Role {
+              Stick,
+              Look,
+              Press(usize),
+          }
+
+          struct Finger {
+              id: u64,
+              role: Role,
+              origin: [f32; 2],
+              pos: [f32; 2],
+          }
+
+          struct Pad {
+              /// The window in pixels.
+              size: [f32; 2],
+              /// A menu or a screen is open: the first finger is the mouse, only BACK is drawn.
+              menu: bool,
+              fingers: Vec<Finger>,
+              /// Pixels the right thumb dragged since the view last turned.
+              look: [f32; 2],
+          }
+
+          static PAD: Mutex<Pad> = Mutex::new(Pad { size: [1792.0, 828.0], menu: false, fingers: Vec::new(), look: [0.0; 2] });
+
+          fn centre(b: &Btn, size: [f32; 2]) -> ([f32; 2], f32) {
+              ([b.x * size[0], b.y * size[1]], b.r * size[1])
+          }
+
+          /// The window size in pixels (landscape).
+          pub fn set_size(w: f32, h: f32) {
+              if w > 1.0 && h > 1.0
+                  && let Ok(mut pad) = PAD.lock()
+              {
+                  pad.size = [w, h];
+              }
+          }
+
+          /// Whether a menu is open, as the game says each frame; fingers do not carry over.
+          pub fn set_menu(menu: bool) {
+              if let Ok(mut pad) = PAD.lock()
+                  && pad.menu != menu
+              {
+                  pad.menu = menu;
+                  pad.fingers.clear();
+                  pad.look = [0.0; 2];
+              }
+          }
+
+          pub fn menu() -> bool {
+              PAD.lock().map(|p| p.menu).unwrap_or(true)
+          }
+
+          /// A touch. True when an on-screen control owns the finger (it is not a mouse click then).
+          pub fn touch(id: u64, phase: TouchPhase, x: f32, y: f32) -> bool {
+              let Ok(mut pad) = PAD.lock() else {
+                  return false;
+              };
+              let size = pad.size;
+              match phase {
+                  TouchPhase::Started => {
+                      let menu = pad.menu;
+                      for (i, b) in BTNS.iter().enumerate() {
+                          if b.menu != menu {
+                              continue;
+                          }
+                          let (c, r) = centre(b, size);
+                          let reach = r * 1.25;
+                          if (x - c[0]).powi(2) + (y - c[1]).powi(2) <= reach * reach {
+                              pad.fingers.push(Finger { id, role: Role::Press(i), origin: [x, y], pos: [x, y] });
+                              return true;
+                          }
+                      }
+                      if menu {
+                          return false;
+                      }
+                      let role = if x < size[0] * 0.5 { Role::Stick } else { Role::Look };
+                      pad.fingers.push(Finger { id, role, origin: [x, y], pos: [x, y] });
+                      true
+                  }
+                  TouchPhase::Moved => {
+                      let Some(f) = pad.fingers.iter().position(|f| f.id == id) else {
+                          return false;
+                      };
+                      let (dx, dy) = (x - pad.fingers[f].pos[0], y - pad.fingers[f].pos[1]);
+                      pad.fingers[f].pos = [x, y];
+                      if pad.fingers[f].role == Role::Look {
+                          pad.look[0] += dx;
+                          pad.look[1] += dy;
+                      }
+                      true
+                  }
+                  TouchPhase::Ended | TouchPhase::Cancelled => {
+                      let before = pad.fingers.len();
+                      pad.fingers.retain(|f| f.id != id);
+                      pad.fingers.len() != before
+                  }
+              }
+          }
+
+          /// The virtual pad for this frame.
+          pub fn state() -> PadState {
+              let mut s = PadState::default();
+              let Ok(pad) = PAD.lock() else {
+                  return s;
+              };
+              let radius = pad.size[1] * 0.16;
+              for f in &pad.fingers {
+                  match f.role {
+                      Role::Stick => {
+                          let (dx, dy) = ((f.pos[0] - f.origin[0]) / radius, (f.pos[1] - f.origin[1]) / radius);
+                          let len = (dx * dx + dy * dy).sqrt();
+                          let k = if len > 1.0 { 1.0 / len } else { 1.0 };
+                          s.left = [dx * k, -dy * k];
+                          if len > 1.25 {
+                              s.set(Button::LeftStick, true);
+                          }
+                      }
+                      Role::Look => {}
+                      Role::Press(i) => match BTNS[i].kind {
+                          Kind::Pad(button) => s.set(button, true),
+                          Kind::Trigger(t) => s.triggers[t] = 1.0,
+                      },
+                  }
+              }
+              s
+          }
+
+          /// The pixels the view is to turn by since the last call.
+          pub fn take_look() -> [f32; 2] {
+              PAD.lock().map(|mut p| std::mem::take(&mut p.look)).unwrap_or([0.0; 2])
+          }
+
+          /// The controls, over the game.
+          pub fn draw(b: &mut HudBatch, a: &HudAtlas) {
+              let Ok(pad) = PAD.lock() else {
+                  return;
+              };
+              let size = [b.width, b.height];
+              for (i, btn) in BTNS.iter().enumerate() {
+                  if btn.menu != pad.menu {
+                      continue;
+                  }
+                  let (c, r) = centre(btn, size);
+                  let down = pad.fingers.iter().any(|f| f.role == Role::Press(i));
+                  let fill = if down { rgba(255, 255, 255, 150) } else { rgba(20, 20, 20, 110) };
+                  b.fill(a, c[0] - r, c[1] - r, r * 2.0, r * 2.0, fill);
+                  b.fill(a, c[0] - r, c[1] - r, r * 2.0, r * 0.08, rgba(255, 255, 255, 140));
+                  b.fill(a, c[0] - r, c[1] + r * 0.92, r * 2.0, r * 0.08, rgba(255, 255, 255, 140));
+                  b.fill(a, c[0] - r, c[1] - r, r * 0.08, r * 2.0, rgba(255, 255, 255, 140));
+                  b.fill(a, c[0] + r * 0.92, c[1] - r, r * 0.08, r * 2.0, rgba(255, 255, 255, 140));
+                  let width = HudBatch::text_width(a, btn.label);
+                  let start = b.vertices.len();
+                  b.text(a, btn.label, c[0] - width / 2.0, c[1] - 4.0, rgba(255, 255, 255, 235), true);
+                  let scale = ((r * 2.0 - 8.0) / width.max(1.0)).min(r * 0.9 / 8.0).max(0.5);
+                  b.scale_since(start, c[0], c[1], scale, scale);
+              }
+              if pad.menu {
+                  return;
+              }
+              let ring = size[1] * 0.16;
+              for f in &pad.fingers {
+                  if f.role != Role::Stick {
+                      continue;
+                  }
+                  let (dx, dy) = (f.pos[0] - f.origin[0], f.pos[1] - f.origin[1]);
+                  let len = (dx * dx + dy * dy).sqrt();
+                  let k = if len > ring { ring / len } else { 1.0 };
+                  let (kx, ky) = (f.origin[0] + dx * k, f.origin[1] + dy * k);
+                  let base = ring * 0.9;
+                  b.fill(a, f.origin[0] - base, f.origin[1] - base, base * 2.0, base * 2.0, rgba(255, 255, 255, 40));
+                  let knob = ring * 0.4;
+                  b.fill(a, kx - knob, ky - knob, knob * 2.0, knob * 2.0, rgba(255, 255, 255, 130));
+              }
+          }
+
+          impl super::Game<'_> {
+              /// The virtual pad of the fingers; the game polls it like a controller.
+              pub(super) fn ios_pad_state(&mut self) -> PadState {
+                  set_menu(self.pad_in_menu());
+                  state()
+              }
+          }
+          '''
+          open('crates/horizon-client/src/game/ios_touch.rs', 'w').write(IOS_TOUCH)
+          sub('crates/horizon-client/src/game.rs', [
+              ('mod android_bundled;\n', 'mod android_bundled;\n#[cfg(target_os = "ios")]\nmod ios_touch;\n', 1),
+              ('            #[cfg(not(target_os = "macos"))]\n            if self.captured && self.focused {',
+               '            #[cfg(target_os = "ios")]\n            {\n                self.captured = capture;\n            }\n            #[cfg(not(target_os = "macos"))]\n            if self.captured && self.focused {', 1),
+              ('        self.flush_ime(&mut hud);\n', '        #[cfg(target_os = "ios")]\n        ios_touch::draw(&mut hud, &self.gui.atlas);\n        self.flush_ime(&mut hud);\n', 1),
+          ])
+          AI = 'cfg!(any(target_os = "android", target_os = "ios"))'
+          sub('crates/horizon-client/src/game/pad.rs', [
+              ('        if !settings.enabled && !cfg!(target_os = "android") {', '        if !settings.enabled && !' + AI + ' {', 1),
+              ('(!settings.enabled && !cfg!(target_os = "android"))', '(!settings.enabled && !' + AI + ')', 2),
+              ('            None => self.pad.read(),\n',
+               '            None => {\n                #[cfg(target_os = "ios")]\n                {\n                    self.ios_pad_state()\n                }\n                #[cfg(not(target_os = "ios"))]\n                {\n                    self.pad.read()\n                }\n            }\n', 1),
+              ('    pub(super) fn pad_look(&mut self, seconds: f32) {\n',
+               '    pub(super) fn pad_look(&mut self, seconds: f32) {\n        #[cfg(target_os = "ios")]\n        {\n            let [dx, dy] = super::ios_touch::take_look();\n            if (dx != 0.0 || dy != 0.0) && !self.pad_in_menu() && self.player.is_some() {\n                let (yaw, pitch) = (f64::from(dx) * 1.2, f64::from(dy) * 1.2);\n                self.tutorial.mouse(yaw * 0.15, pitch * 0.15);\n                self.turn_player(yaw, pitch);\n            }\n        }\n', 1),
+          ])
+          # The keyboard's Return key: winit sends it as the character "\n"; the game wants the Enter key.
+          sub('third_party/winit/src/platform_impl/ios/view.rs', [
+              ('                let text = smol_str::SmolStr::from_iter([c]);\n',
+               '                let text = smol_str::SmolStr::from_iter([c]);\n                let enter = c == \'\\n\' || c == \'\\r\';\n', 1),
+              ('                                text: if state == ElementState::Pressed {',
+               '                                text: if state == ElementState::Pressed && !enter {', 1),
+              ('                                logical_key: Key::Character(text.clone()),\n                                physical_key: PhysicalKey::Unidentified(\n                                    NativeKeyCode::Unidentified,\n                                ),',
+               '                                logical_key: if enter {\n                                    Key::Named(NamedKey::Enter)\n                                } else {\n                                    Key::Character(text.clone())\n                                },\n                                physical_key: if enter {\n                                    PhysicalKey::Code(KeyCode::Enter)\n                                } else {\n                                    PhysicalKey::Unidentified(NativeKeyCode::Unidentified)\n                                },', 1),
           ])
           print('iOS edits applied')
           PY_EOF

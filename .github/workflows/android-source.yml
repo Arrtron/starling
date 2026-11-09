@@ -61,11 +61,18 @@ jobs:
           ])
           # First launch on iOS: install the game files (the Android installer) while a window keeps the app alive.
           IOS_FN = r'''/// iOS: the game lives in Documents/horizon. When its files are not installed yet, download them
-          /// (official Mojang endpoints, as the Android build does) on a thread while a window keeps the app
-          /// alive; the process ends when the install does, and the next launch starts the game.
+          /// (official Mojang endpoints, as the Android build does) on a thread while a progress screen
+          /// shows the step; the next launch starts the game.
           #[cfg(target_os = "ios")]
           fn ios_prepare(home: &std::path::Path) -> bool {
+              use std::rc::Rc;
               use std::sync::atomic::{AtomicU64, Ordering};
+              // 0: installing, 1: finished, 2: failed.
+              static STATE: AtomicU64 = AtomicU64::new(0);
+              static DONE: AtomicU64 = AtomicU64::new(0);
+              static TOTAL: AtomicU64 = AtomicU64::new(0);
+              static LABEL: std::sync::Mutex<String> = std::sync::Mutex::new(String::new());
+
               let _ = std::fs::create_dir_all(home);
               // Old logs are packed to *.log.gz at start: delete them, keep only latest.log.
               if let Ok(entries) = std::fs::read_dir(home.join("logs")) {
@@ -98,6 +105,11 @@ jobs:
               std::thread::spawn(move || {
                   let last = AtomicU64::new(u64::MAX);
                   let result = horizon_client::official_install::install_with_progress(&home, |p| {
+                      DONE.store(p.done, Ordering::Relaxed);
+                      TOTAL.store(p.total, Ordering::Relaxed);
+                      if let Ok(mut label) = LABEL.lock() {
+                          *label = p.stage.label().to_string();
+                      }
                       let bucket = (p.stage as u64) * 1000 + if p.total > 0 { p.done * 20 / p.total } else { 0 };
                       if last.swap(bucket, Ordering::Relaxed) != bucket {
                           log::info!("Horizon iOS install: {} ({}/{})", p.stage.label(), p.done, p.total);
@@ -105,30 +117,192 @@ jobs:
                       }
                   });
                   match result {
-                      Ok(()) => log::info!("Horizon iOS: install finished; open the app again to play"),
-                      Err(e) => log::error!("Horizon iOS: install failed: {e}"),
+                      Ok(()) => {
+                          log::info!("Horizon iOS: install finished; open the app again to play");
+                          STATE.store(1, Ordering::Relaxed);
+                      }
+                      Err(e) => {
+                          log::error!("Horizon iOS: install failed: {e}");
+                          STATE.store(2, Ordering::Relaxed);
+                      }
                   }
                   logging::flush();
-                  std::process::exit(0);
               });
-              struct Keep(Option<winit::window::Window>);
+
+              /// A 5x7 pixel font for the install screen (upper case, digits and a few signs).
+              fn glyph(c: char) -> [u8; 7] {
+                  match c.to_ascii_uppercase() {
+                      'A' => [0b01110, 0b10001, 0b10001, 0b11111, 0b10001, 0b10001, 0b10001],
+                      'B' => [0b11110, 0b10001, 0b10001, 0b11110, 0b10001, 0b10001, 0b11110],
+                      'C' => [0b01110, 0b10001, 0b10000, 0b10000, 0b10000, 0b10001, 0b01110],
+                      'D' => [0b11110, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b11110],
+                      'E' => [0b11111, 0b10000, 0b10000, 0b11110, 0b10000, 0b10000, 0b11111],
+                      'F' => [0b11111, 0b10000, 0b10000, 0b11110, 0b10000, 0b10000, 0b10000],
+                      'G' => [0b01110, 0b10001, 0b10000, 0b10111, 0b10001, 0b10001, 0b01111],
+                      'H' => [0b10001, 0b10001, 0b10001, 0b11111, 0b10001, 0b10001, 0b10001],
+                      'I' => [0b01110, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0b01110],
+                      'J' => [0b00111, 0b00010, 0b00010, 0b00010, 0b00010, 0b10010, 0b01100],
+                      'K' => [0b10001, 0b10010, 0b10100, 0b11000, 0b10100, 0b10010, 0b10001],
+                      'L' => [0b10000, 0b10000, 0b10000, 0b10000, 0b10000, 0b10000, 0b11111],
+                      'M' => [0b10001, 0b11011, 0b10101, 0b10101, 0b10001, 0b10001, 0b10001],
+                      'N' => [0b10001, 0b11001, 0b10101, 0b10011, 0b10001, 0b10001, 0b10001],
+                      'O' => [0b01110, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01110],
+                      'P' => [0b11110, 0b10001, 0b10001, 0b11110, 0b10000, 0b10000, 0b10000],
+                      'Q' => [0b01110, 0b10001, 0b10001, 0b10001, 0b10101, 0b10010, 0b01101],
+                      'R' => [0b11110, 0b10001, 0b10001, 0b11110, 0b10100, 0b10010, 0b10001],
+                      'S' => [0b01111, 0b10000, 0b10000, 0b01110, 0b00001, 0b00001, 0b11110],
+                      'T' => [0b11111, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100],
+                      'U' => [0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01110],
+                      'V' => [0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01010, 0b00100],
+                      'W' => [0b10001, 0b10001, 0b10001, 0b10101, 0b10101, 0b11011, 0b10001],
+                      'X' => [0b10001, 0b10001, 0b01010, 0b00100, 0b01010, 0b10001, 0b10001],
+                      'Y' => [0b10001, 0b10001, 0b01010, 0b00100, 0b00100, 0b00100, 0b00100],
+                      'Z' => [0b11111, 0b00001, 0b00010, 0b00100, 0b01000, 0b10000, 0b11111],
+                      '0' => [0b01110, 0b10001, 0b10011, 0b10101, 0b11001, 0b10001, 0b01110],
+                      '1' => [0b00100, 0b01100, 0b00100, 0b00100, 0b00100, 0b00100, 0b01110],
+                      '2' => [0b01110, 0b10001, 0b00001, 0b00010, 0b00100, 0b01000, 0b11111],
+                      '3' => [0b11110, 0b00001, 0b00001, 0b01110, 0b00001, 0b00001, 0b11110],
+                      '4' => [0b00010, 0b00110, 0b01010, 0b10010, 0b11111, 0b00010, 0b00010],
+                      '5' => [0b11111, 0b10000, 0b11110, 0b00001, 0b00001, 0b10001, 0b01110],
+                      '6' => [0b00110, 0b01000, 0b10000, 0b11110, 0b10001, 0b10001, 0b01110],
+                      '7' => [0b11111, 0b00001, 0b00010, 0b00100, 0b01000, 0b01000, 0b01000],
+                      '8' => [0b01110, 0b10001, 0b10001, 0b01110, 0b10001, 0b10001, 0b01110],
+                      '9' => [0b01110, 0b10001, 0b10001, 0b01111, 0b00001, 0b00010, 0b01100],
+                      '%' => [0b11000, 0b11001, 0b00010, 0b00100, 0b01000, 0b10011, 0b00011],
+                      '.' => [0, 0, 0, 0, 0, 0b01100, 0b01100],
+                      '-' => [0, 0, 0, 0b11111, 0, 0, 0],
+                      _ => [0; 7],
+                  }
+              }
+
+              fn fill_rect(buf: &mut [u32], w: usize, h: usize, x: usize, y: usize, rw: usize, rh: usize, color: u32) {
+                  for yy in y..(y + rh).min(h) {
+                      for xx in x..(x + rw).min(w) {
+                          buf[yy * w + xx] = color;
+                      }
+                  }
+              }
+
+              fn text_width(s: &str, scale: usize) -> usize {
+                  s.chars().count() * 6 * scale
+              }
+
+              /// Text centred on the width of the screen, top at `y`.
+              fn draw_text(buf: &mut [u32], w: usize, h: usize, s: &str, y: usize, scale: usize, color: u32) {
+                  let mut x = w.saturating_sub(text_width(s, scale)) / 2;
+                  for c in s.chars() {
+                      let rows = glyph(c);
+                      for (row, bits) in rows.iter().enumerate() {
+                          for col in 0..5 {
+                              if bits & (1 << (4 - col)) != 0 {
+                                  fill_rect(buf, w, h, x + col * scale, y + row * scale, scale, scale, color);
+                              }
+                          }
+                      }
+                      x += 6 * scale;
+                  }
+              }
+
+              /// The first-launch install screen: title, current step, a bar and the percent.
+              fn draw_install_screen(buf: &mut [u32], w: usize, h: usize, label: &str, percent: usize, hint: &str) {
+                  buf.fill(0x000d0d0d);
+                  let s = (w.min(h * 2) / 260).max(2);
+                  draw_text(buf, w, h, "HORIZON", h / 5, s * 2, 0x00ffffff);
+                  draw_text(buf, w, h, label, h * 2 / 5, s, 0x00c8c8c8);
+                  let bar_w = w * 7 / 10;
+                  let bar_h = (s * 3).max(8);
+                  let bar_x = (w - bar_w) / 2;
+                  let bar_y = h * 3 / 5;
+                  fill_rect(buf, w, h, bar_x, bar_y, bar_w, bar_h, 0x00333333);
+                  fill_rect(buf, w, h, bar_x, bar_y, bar_w * percent.min(100) / 100, bar_h, 0x0055cc55);
+                  draw_text(buf, w, h, &format!("{}%", percent.min(100)), bar_y + bar_h + s * 3, s * 2, 0x00ffffff);
+                  draw_text(buf, w, h, hint, h * 4 / 5, s, 0x00808080);
+              }
+
+              struct Keep {
+                  window: Option<Rc<winit::window::Window>>,
+                  context: Option<softbuffer::Context<Rc<winit::window::Window>>>,
+                  surface: Option<softbuffer::Surface<Rc<winit::window::Window>, Rc<winit::window::Window>>>,
+              }
+              impl Keep {
+                  fn draw(&mut self) {
+                      let (Some(window), Some(surface)) = (&self.window, &mut self.surface) else {
+                          return;
+                      };
+                      let size = window.inner_size();
+                      let (Some(w), Some(h)) =
+                          (std::num::NonZeroU32::new(size.width), std::num::NonZeroU32::new(size.height))
+                      else {
+                          return;
+                      };
+                      if surface.resize(w, h).is_err() {
+                          return;
+                      }
+                      let Ok(mut buffer) = surface.buffer_mut() else {
+                          return;
+                      };
+                      let state = STATE.load(Ordering::Relaxed);
+                      let total = TOTAL.load(Ordering::Relaxed);
+                      let percent = if state == 1 {
+                          100
+                      } else if total > 0 {
+                          (DONE.load(Ordering::Relaxed) * 100 / total) as usize
+                      } else {
+                          0
+                      };
+                      let (label, hint) = match state {
+                          1 => ("DONE".to_string(), "CLOSE THE APP AND OPEN IT AGAIN"),
+                          2 => ("INSTALL FAILED".to_string(), "SEE THE LOGS FOLDER IN FILES"),
+                          _ => {
+                              let label = LABEL.lock().map(|l| l.clone()).unwrap_or_default();
+                              let label = if label.is_empty() { "PREPARING".to_string() } else { label };
+                              (label, "KEEP THE APP OPEN AND THE SCREEN ON")
+                          }
+                      };
+                      draw_install_screen(&mut buffer, w.get() as usize, h.get() as usize, &label, percent, hint);
+                      let _ = buffer.present();
+                  }
+              }
               impl winit::application::ApplicationHandler for Keep {
                   fn resumed(&mut self, el: &winit::event_loop::ActiveEventLoop) {
-                      if self.0.is_none() {
-                          self.0 = el.create_window(winit::window::Window::default_attributes()).ok();
+                      if self.window.is_some() {
+                          return;
                       }
+                      let Ok(window) = el.create_window(winit::window::Window::default_attributes()) else {
+                          return;
+                      };
+                      let window = Rc::new(window);
+                      match softbuffer::Context::new(window.clone()) {
+                          Ok(context) => {
+                              self.surface = softbuffer::Surface::new(&context, window.clone()).ok();
+                              self.context = Some(context);
+                          }
+                          Err(e) => log::error!("Horizon iOS: no progress screen: {e}"),
+                      }
+                      self.window = Some(window);
                   }
                   fn window_event(
                       &mut self,
                       _: &winit::event_loop::ActiveEventLoop,
                       _: winit::window::WindowId,
-                      _: winit::event::WindowEvent,
+                      event: winit::event::WindowEvent,
                   ) {
+                      if matches!(event, winit::event::WindowEvent::RedrawRequested) {
+                          self.draw();
+                      }
+                  }
+                  fn about_to_wait(&mut self, el: &winit::event_loop::ActiveEventLoop) {
+                      el.set_control_flow(winit::event_loop::ControlFlow::WaitUntil(
+                          std::time::Instant::now() + std::time::Duration::from_millis(250),
+                      ));
+                      if let Some(window) = &self.window {
+                          window.request_redraw();
+                      }
                   }
               }
               match winit::event_loop::EventLoop::new() {
                   Ok(el) => {
-                      let _ = el.run_app(&mut Keep(None));
+                      let _ = el.run_app(&mut Keep { window: None, context: None, surface: None });
                   }
                   Err(e) => log::error!("Horizon iOS: no event loop: {e}"),
               }
@@ -143,7 +317,7 @@ jobs:
           # iOS main thread has a 1 MB stack (less under LiveContainer); the game's frames are huge.
           # Run every event callback on a 32 MiB stack of its own (stacker).
           sub('crates/horizon-client/Cargo.toml', [
-              ('[dev-dependencies]\n', "[target.'cfg(target_os = \"ios\")'.dependencies]\nstacker = \"0.1\"\n\n[dev-dependencies]\n", 1),
+              ('[dev-dependencies]\n', "[target.'cfg(target_os = \"ios\")'.dependencies]\nstacker = \"0.1\"\nsoftbuffer = \"0.4\"\n\n[dev-dependencies]\n", 1),
           ])
           BIG_STACK = r'''#[cfg(target_os = "ios")]
           struct BigStack<'a, H>(&'a mut H, Option<u64>);
@@ -246,7 +420,8 @@ jobs:
                       CGRect { origin: reported.origin, size: CGSize { width, height } }
                   };
 
-                  let frame = match window_attributes.inner_size {''', 1),
+                  // The game asks for 854x480; on a phone that is bigger than the screen: always fill it.
+                  let frame = match None::<crate::dpi::Size> {''', 1),
           ])
           print('iOS edits applied')
           PY_EOF

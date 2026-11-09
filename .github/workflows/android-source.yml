@@ -131,11 +131,13 @@ jobs:
                '    raise_open_file_limit();\n    #[cfg(target_os = "ios")]\n    if !ios_prepare(&home) {\n        return;\n    }\n', 1),
               ('/// The JVM raises its open-file limit', IOS_FN + '\n/// The JVM raises its open-file limit', 1),
           ])
+          # iOS main thread has a 1 MB stack (less under LiveContainer); the game's frames are huge.
+          # Run every event callback on a 32 MiB stack of its own (stacker).
           sub('crates/horizon-client/Cargo.toml', [
               ('[dev-dependencies]\n', "[target.'cfg(target_os = \"ios\")'.dependencies]\nstacker = \"0.1\"\n\n[dev-dependencies]\n", 1),
           ])
           BIG_STACK = r'''#[cfg(target_os = "ios")]
-          struct BigStack<'a, H>(&'a mut H);
+          struct BigStack<'a, H>(&'a mut H, Option<u64>);
           #[cfg(target_os = "ios")]
           const BIG_STACK: usize = 32 * 1024 * 1024;
           #[cfg(target_os = "ios")]
@@ -150,7 +152,37 @@ jobs:
                   stacker::grow(BIG_STACK, || self.0.user_event(el, event))
               }
               fn window_event(&mut self, el: &ActiveEventLoop, id: WindowId, event: WindowEvent) {
-                  stacker::grow(BIG_STACK, || self.0.window_event(el, id, event))
+                  use winit::event::TouchPhase;
+                  if let WindowEvent::Resized(s) = &event {
+                      log::info!("Horizon iOS: window resized to {}x{}", s.width, s.height);
+                  }
+                  if let WindowEvent::ScaleFactorChanged { scale_factor, .. } = &event {
+                      log::info!("Horizon iOS: scale factor {scale_factor}");
+                  }
+                  // iOS only sends touches: the first finger acts as the mouse (menus).
+                  let events = match event {
+                      WindowEvent::Touch(t) => {
+                          let (device_id, position) = (t.device_id, t.location);
+                          let moved = WindowEvent::CursorMoved { device_id, position };
+                          let button = |state| WindowEvent::MouseInput { device_id, state, button: MouseButton::Left };
+                          match t.phase {
+                              _ if self.1.is_some_and(|finger| finger != t.id) => Vec::new(),
+                              TouchPhase::Started => {
+                                  self.1 = Some(t.id);
+                                  vec![moved, button(ElementState::Pressed)]
+                              }
+                              TouchPhase::Moved => vec![moved],
+                              TouchPhase::Ended | TouchPhase::Cancelled => {
+                                  self.1 = None;
+                                  vec![moved, button(ElementState::Released)]
+                              }
+                          }
+                      }
+                      other => vec![other],
+                  };
+                  for event in events {
+                      stacker::grow(BIG_STACK, || self.0.window_event(el, id, event))
+                  }
               }
               fn device_event(&mut self, el: &ActiveEventLoop, id: DeviceId, event: DeviceEvent) {
                   stacker::grow(BIG_STACK, || self.0.device_event(el, id, event))
@@ -172,7 +204,7 @@ jobs:
           '''
           sub('crates/horizon-client/src/game.rs', [
               ('    let result = new_event_loop()?.run_app(&mut app);\n    narrator::stop();',
-               '    #[cfg(target_os = "ios")]\n    let result = new_event_loop()?.run_app(&mut BigStack(&mut app));\n    #[cfg(not(target_os = "ios"))]\n    let result = new_event_loop()?.run_app(&mut app);\n    narrator::stop();', 1),
+               '    #[cfg(target_os = "ios")]\n    let result = new_event_loop()?.run_app(&mut BigStack(&mut app, None));\n    #[cfg(not(target_os = "ios"))]\n    let result = new_event_loop()?.run_app(&mut app);\n    narrator::stop();', 1),
               ('fn new_event_loop() -> std::result::Result', BIG_STACK + 'fn new_event_loop() -> std::result::Result', 1),
           ])
           print('iOS edits applied')

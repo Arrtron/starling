@@ -220,6 +220,34 @@ jobs:
                '    #[cfg(target_os = "ios")]\n    let result = new_event_loop()?.run_app(&mut BigStack(&mut app, None));\n    #[cfg(not(target_os = "ios"))]\n    let result = new_event_loop()?.run_app(&mut app);\n    narrator::stop();', 1),
               ('fn new_event_loop() -> std::result::Result', BIG_STACK + 'fn new_event_loop() -> std::result::Result', 1),
           ])
+          # Under LiveContainer the window is bigger than the real screen (UIScreen.bounds lies).
+          # Never let the window exceed the physical screen (nativeBounds), keeping its orientation.
+          sub('third_party/winit/src/platform_impl/ios/window.rs', [
+              ('        let screen_bounds = screen.bounds();\n\n        let frame = match window_attributes.inner_size {',
+               '''        let screen_bounds = {
+                      let reported = screen.bounds();
+                      let native = screen.nativeBounds();
+                      let native_scale = screen.nativeScale().max(1.0);
+                      let long = native.size.width.max(native.size.height) / native_scale;
+                      let short = native.size.width.min(native.size.height) / native_scale;
+                      let (max_w, max_h) = if reported.size.width >= reported.size.height {
+                          (long, short)
+                      } else {
+                          (short, long)
+                      };
+                      let width = reported.size.width.min(max_w);
+                      let height = reported.size.height.min(max_h);
+                      if width != reported.size.width || height != reported.size.height {
+                          warn!(
+                              "winit iOS: window {}x{} pt does not fit the screen, using {}x{} pt",
+                              reported.size.width, reported.size.height, width, height
+                          );
+                      }
+                      CGRect { origin: reported.origin, size: CGSize { width, height } }
+                  };
+
+                  let frame = match window_attributes.inner_size {''', 1),
+          ])
           print('iOS edits applied')
           PY_EOF
           git diff --stat

@@ -431,17 +431,19 @@ jobs:
                   let frame = match None::<crate::dpi::Size> {''', 1),
           ])
           # On-screen controls: the fingers are a virtual game pad (the game plays with a pad already).
-          IOS_TOUCH = r'''//! iOS: on-screen controls. Fingers become a virtual game pad, which the game already plays with:
-          //! the left thumb moves, the right thumb turns the view, buttons are drawn on the screen.
+          IOS_TOUCH = r'''//! iOS: on-screen controls in the style of Minecraft Bedrock. Fingers become a virtual game pad, which
+          //! the game already plays with: a fixed stick on the left, JUMP and SNEAK on the right, the hotbar and
+          //! the "..." inventory button at the bottom, CHAT / pause / view at the top. A tap on the world uses or
+          //! places, a long press mines or hits, a drag turns the view.
           use horizon_client::gamepad::{Button, PadState};
           use horizon_client::hud::{HudAtlas, HudBatch, rgba};
           use std::sync::Mutex;
+          use std::time::{Duration, Instant};
           use winit::event::TouchPhase;
 
           #[derive(Clone, Copy)]
           enum Kind {
               Pad(Button),
-              Trigger(usize),
           }
 
           struct Btn {
@@ -455,33 +457,36 @@ jobs:
               menu: bool,
           }
 
-          const BTNS: [Btn; 12] = [
-              Btn { label: "JUMP", x: 0.90, y: 0.52, r: 0.10, kind: Kind::Pad(Button::South), menu: false },
-              Btn { label: "HIT", x: 0.74, y: 0.78, r: 0.11, kind: Kind::Trigger(1), menu: false },
-              Btn { label: "USE", x: 0.91, y: 0.80, r: 0.11, kind: Kind::Trigger(0), menu: false },
-              Btn { label: "SNEAK", x: 0.50, y: 0.88, r: 0.08, kind: Kind::Pad(Button::RightStick), menu: false },
-              Btn { label: "INV", x: 0.60, y: 0.10, r: 0.07, kind: Kind::Pad(Button::North), menu: false },
-              Btn { label: "MENU", x: 0.50, y: 0.10, r: 0.07, kind: Kind::Pad(Button::Start), menu: false },
-              Btn { label: "<", x: 0.30, y: 0.10, r: 0.07, kind: Kind::Pad(Button::LeftBumper), menu: false },
-              Btn { label: ">", x: 0.70, y: 0.10, r: 0.07, kind: Kind::Pad(Button::RightBumper), menu: false },
-              Btn { label: "CHAT", x: 0.40, y: 0.10, r: 0.07, kind: Kind::Pad(Button::DPadRight), menu: false },
-              Btn { label: "VIEW", x: 0.80, y: 0.10, r: 0.07, kind: Kind::Pad(Button::DPadUp), menu: false },
-              Btn { label: "DROP", x: 0.90, y: 0.10, r: 0.07, kind: Kind::Pad(Button::East), menu: false },
+          const BTNS: [Btn; 6] = [
+              Btn { label: "^", x: 0.89, y: 0.70, r: 0.105, kind: Kind::Pad(Button::South), menu: false },
+              Btn { label: "v", x: 0.77, y: 0.84, r: 0.07, kind: Kind::Pad(Button::RightStick), menu: false },
+              Btn { label: "T", x: 0.43, y: 0.075, r: 0.058, kind: Kind::Pad(Button::DPadRight), menu: false },
+              Btn { label: "II", x: 0.57, y: 0.075, r: 0.058, kind: Kind::Pad(Button::Start), menu: false },
+              Btn { label: "O", x: 0.91, y: 0.075, r: 0.058, kind: Kind::Pad(Button::DPadUp), menu: false },
               Btn { label: "BACK", x: 0.07, y: 0.11, r: 0.08, kind: Kind::Pad(Button::East), menu: true },
           ];
+          /// The "..." button next to the hotbar: its place follows the hotbar's.
+          const INV: usize = BTNS.len();
+
+          /// A tap shorter than this and still is a tap; held longer it mines / hits.
+          const HOLD: Duration = Duration::from_millis(350);
+          /// Pixels a finger may drift and still be a tap.
+          const SLOP: f32 = 14.0;
 
           #[derive(Clone, Copy, PartialEq)]
           enum Role {
               Stick,
               Look,
               Press(usize),
+              Ignore,
           }
 
           struct Finger {
               id: u64,
               role: Role,
-              origin: [f32; 2],
               pos: [f32; 2],
+              since: Instant,
+              travelled: f32,
           }
 
           struct Pad {
@@ -492,17 +497,52 @@ jobs:
               fingers: Vec<Finger>,
               /// Pixels the right thumb dragged since the view last turned.
               look: [f32; 2],
+              /// A tap on the world: "use" is pressed until then.
+              tap_until: Option<Instant>,
+              /// A hotbar slot that was tapped.
+              slot: Option<usize>,
           }
 
-          static PAD: Mutex<Pad> = Mutex::new(Pad { size: [1792.0, 828.0], menu: false, fingers: Vec::new(), look: [0.0; 2] });
+          static PAD: Mutex<Pad> = Mutex::new(Pad {
+              size: [1792.0, 828.0],
+              menu: false,
+              fingers: Vec::new(),
+              look: [0.0; 2],
+              tap_until: None,
+              slot: None,
+          });
 
-          fn centre(b: &Btn, size: [f32; 2]) -> ([f32; 2], f32) {
-              ([b.x * size[0], b.y * size[1]], b.r * size[1])
+          fn info(i: usize) -> (&'static str, Kind, bool) {
+              if i == INV {
+                  ("...", Kind::Pad(Button::North), false)
+              } else {
+                  (BTNS[i].label, BTNS[i].kind, BTNS[i].menu)
+              }
+          }
+
+          /// Centre and radius of a button, in pixels.
+          fn layout(i: usize, size: [f32; 2]) -> ([f32; 2], f32) {
+              if i == INV {
+                  let b = HudBatch::new([size[0] as u32, size[1] as u32]);
+                  ([(b.width / 2.0 + 91.0 + 14.0) * b.scale, (b.height - 11.0) * b.scale], 12.0 * b.scale)
+              } else {
+                  let b = &BTNS[i];
+                  ([b.x * size[0], b.y * size[1]], b.r * size[1])
+              }
+          }
+
+          fn stick_base(size: [f32; 2]) -> [f32; 2] {
+              [size[0] * 0.15, size[1] * 0.70]
+          }
+
+          fn stick_radius(size: [f32; 2]) -> f32 {
+              size[1] * 0.15
           }
 
           /// The window size in pixels (landscape).
           pub fn set_size(w: f32, h: f32) {
-              if w > 1.0 && h > 1.0
+              if w > 1.0
+                  && h > 1.0
                   && let Ok(mut pad) = PAD.lock()
               {
                   pad.size = [w, h];
@@ -517,11 +557,13 @@ jobs:
                   pad.menu = menu;
                   pad.fingers.clear();
                   pad.look = [0.0; 2];
+                  pad.tap_until = None;
               }
           }
 
-          pub fn menu() -> bool {
-              PAD.lock().map(|p| p.menu).unwrap_or(true)
+          /// A hotbar slot tapped since the last call.
+          pub fn take_slot() -> Option<usize> {
+              PAD.lock().ok().and_then(|mut p| p.slot.take())
           }
 
           /// A touch. True when an on-screen control owns the finger (it is not a mouse click then).
@@ -530,25 +572,35 @@ jobs:
                   return false;
               };
               let size = pad.size;
+              let now = Instant::now();
               match phase {
                   TouchPhase::Started => {
                       let menu = pad.menu;
-                      for (i, b) in BTNS.iter().enumerate() {
-                          if b.menu != menu {
+                      let finger = |role| Finger { id, role, pos: [x, y], since: now, travelled: 0.0 };
+                      for i in 0..=INV {
+                          if info(i).2 != menu {
                               continue;
                           }
-                          let (c, r) = centre(b, size);
+                          let (c, r) = layout(i, size);
                           let reach = r * 1.25;
                           if (x - c[0]).powi(2) + (y - c[1]).powi(2) <= reach * reach {
-                              pad.fingers.push(Finger { id, role: Role::Press(i), origin: [x, y], pos: [x, y] });
+                              pad.fingers.push(finger(Role::Press(i)));
                               return true;
                           }
                       }
                       if menu {
                           return false;
                       }
-                      let role = if x < size[0] * 0.5 { Role::Stick } else { Role::Look };
-                      pad.fingers.push(Finger { id, role, origin: [x, y], pos: [x, y] });
+                      let b = HudBatch::new([size[0] as u32, size[1] as u32]);
+                      if let Some(slot) = horizon_client::touch::hotbar_slot(b.width, b.height, [x / b.scale, y / b.scale]) {
+                          pad.slot = Some(slot);
+                          pad.fingers.push(finger(Role::Ignore));
+                          return true;
+                      }
+                      let base = stick_base(size);
+                      let reach = stick_radius(size) * 1.7;
+                      let role = if (x - base[0]).powi(2) + (y - base[1]).powi(2) <= reach * reach { Role::Stick } else { Role::Look };
+                      pad.fingers.push(finger(role));
                       true
                   }
                   TouchPhase::Moved => {
@@ -558,15 +610,23 @@ jobs:
                       let (dx, dy) = (x - pad.fingers[f].pos[0], y - pad.fingers[f].pos[1]);
                       pad.fingers[f].pos = [x, y];
                       if pad.fingers[f].role == Role::Look {
-                          pad.look[0] += dx;
-                          pad.look[1] += dy;
+                          pad.fingers[f].travelled += (dx * dx + dy * dy).sqrt();
+                          if pad.fingers[f].travelled > 6.0 {
+                              pad.look[0] += dx;
+                              pad.look[1] += dy;
+                          }
                       }
                       true
                   }
                   TouchPhase::Ended | TouchPhase::Cancelled => {
-                      let before = pad.fingers.len();
-                      pad.fingers.retain(|f| f.id != id);
-                      pad.fingers.len() != before
+                      let Some(f) = pad.fingers.iter().position(|f| f.id == id) else {
+                          return false;
+                      };
+                      let finger = pad.fingers.remove(f);
+                      if finger.role == Role::Look && finger.travelled < SLOP && finger.since.elapsed() < HOLD {
+                          pad.tap_until = Some(now + Duration::from_millis(60));
+                      }
+                      true
                   }
               }
           }
@@ -577,24 +637,33 @@ jobs:
               let Ok(pad) = PAD.lock() else {
                   return s;
               };
-              let radius = pad.size[1] * 0.16;
+              let base = stick_base(pad.size);
+              let radius = stick_radius(pad.size);
               for f in &pad.fingers {
                   match f.role {
                       Role::Stick => {
-                          let (dx, dy) = ((f.pos[0] - f.origin[0]) / radius, (f.pos[1] - f.origin[1]) / radius);
+                          let (dx, dy) = ((f.pos[0] - base[0]) / radius, (f.pos[1] - base[1]) / radius);
                           let len = (dx * dx + dy * dy).sqrt();
                           let k = if len > 1.0 { 1.0 / len } else { 1.0 };
                           s.left = [dx * k, -dy * k];
-                          if len > 1.25 {
+                          if len > 1.3 {
                               s.set(Button::LeftStick, true);
                           }
                       }
-                      Role::Look => {}
-                      Role::Press(i) => match BTNS[i].kind {
+                      // A long press without moving: mine / hit.
+                      Role::Look => {
+                          if f.travelled < SLOP && f.since.elapsed() >= HOLD {
+                              s.triggers[1] = 1.0;
+                          }
+                      }
+                      Role::Ignore => {}
+                      Role::Press(i) => match info(i).1 {
                           Kind::Pad(button) => s.set(button, true),
-                          Kind::Trigger(t) => s.triggers[t] = 1.0,
                       },
                   }
+              }
+              if pad.tap_until.is_some_and(|t| Instant::now() < t) {
+                  s.triggers[0] = 1.0;
               }
               s
           }
@@ -604,53 +673,66 @@ jobs:
               PAD.lock().map(|mut p| std::mem::take(&mut p.look)).unwrap_or([0.0; 2])
           }
 
+          /// A filled circle, as horizontal strips.
+          fn disc(b: &mut HudBatch, a: &HudAtlas, cx: f32, cy: f32, r: f32, color: u32) {
+              let strips = ((r / 3.0) as i32).clamp(6, 40);
+              let h = 2.0 * r / strips as f32;
+              for s in 0..strips {
+                  let y = -r + (s as f32 + 0.5) * h;
+                  let half = (r * r - y * y).max(0.0).sqrt();
+                  b.fill(a, cx - half, cy + y - h / 2.0, half * 2.0, h + 0.5, color);
+              }
+          }
+
           /// The controls, over the game.
           pub fn draw(b: &mut HudBatch, a: &HudAtlas) {
               let Ok(pad) = PAD.lock() else {
                   return;
               };
               let size = [b.width, b.height];
-              for (i, btn) in BTNS.iter().enumerate() {
-                  if btn.menu != pad.menu {
+              if !pad.menu {
+                  let base = stick_base(size);
+                  let ring = stick_radius(size);
+                  disc(b, a, base[0], base[1], ring, rgba(255, 255, 255, 60));
+                  disc(b, a, base[0], base[1], ring - 3.0, rgba(0, 0, 0, 90));
+                  let mut knob = base;
+                  if let Some(f) = pad.fingers.iter().find(|f| f.role == Role::Stick) {
+                      let (dx, dy) = (f.pos[0] - base[0], f.pos[1] - base[1]);
+                      let len = (dx * dx + dy * dy).sqrt();
+                      let k = if len > ring { ring / len } else { 1.0 };
+                      knob = [base[0] + dx * k, base[1] + dy * k];
+                  }
+                  disc(b, a, knob[0], knob[1], ring * 0.38, rgba(255, 255, 255, 140));
+              }
+              for i in 0..=INV {
+                  let (label, _, menu) = info(i);
+                  if menu != pad.menu {
                       continue;
                   }
-                  let (c, r) = centre(btn, size);
+                  let (c, r) = layout(i, size);
                   let down = pad.fingers.iter().any(|f| f.role == Role::Press(i));
-                  let fill = if down { rgba(255, 255, 255, 150) } else { rgba(20, 20, 20, 110) };
-                  b.fill(a, c[0] - r, c[1] - r, r * 2.0, r * 2.0, fill);
-                  b.fill(a, c[0] - r, c[1] - r, r * 2.0, r * 0.08, rgba(255, 255, 255, 140));
-                  b.fill(a, c[0] - r, c[1] + r * 0.92, r * 2.0, r * 0.08, rgba(255, 255, 255, 140));
-                  b.fill(a, c[0] - r, c[1] - r, r * 0.08, r * 2.0, rgba(255, 255, 255, 140));
-                  b.fill(a, c[0] + r * 0.92, c[1] - r, r * 0.08, r * 2.0, rgba(255, 255, 255, 140));
-                  let width = HudBatch::text_width(a, btn.label);
+                  disc(b, a, c[0], c[1], r, rgba(255, 255, 255, 120));
+                  let inner = if down { rgba(255, 255, 255, 150) } else { rgba(0, 0, 0, 110) };
+                  disc(b, a, c[0], c[1], r - 3.0, inner);
+                  let width = HudBatch::text_width(a, label);
                   let start = b.vertices.len();
-                  b.text(a, btn.label, c[0] - width / 2.0, c[1] - 4.0, rgba(255, 255, 255, 235), true);
-                  let scale = ((r * 2.0 - 8.0) / width.max(1.0)).min(r * 0.9 / 8.0).max(0.5);
+                  b.text(a, label, c[0] - width / 2.0, c[1] - 4.0, rgba(255, 255, 255, 235), true);
+                  let scale = ((r * 1.4) / width.max(1.0)).min(r * 0.9 / 8.0).max(0.5);
                   b.scale_since(start, c[0], c[1], scale, scale);
-              }
-              if pad.menu {
-                  return;
-              }
-              let ring = size[1] * 0.16;
-              for f in &pad.fingers {
-                  if f.role != Role::Stick {
-                      continue;
-                  }
-                  let (dx, dy) = (f.pos[0] - f.origin[0], f.pos[1] - f.origin[1]);
-                  let len = (dx * dx + dy * dy).sqrt();
-                  let k = if len > ring { ring / len } else { 1.0 };
-                  let (kx, ky) = (f.origin[0] + dx * k, f.origin[1] + dy * k);
-                  let base = ring * 0.9;
-                  b.fill(a, f.origin[0] - base, f.origin[1] - base, base * 2.0, base * 2.0, rgba(255, 255, 255, 40));
-                  let knob = ring * 0.4;
-                  b.fill(a, kx - knob, ky - knob, knob * 2.0, knob * 2.0, rgba(255, 255, 255, 130));
               }
           }
 
           impl super::Game<'_> {
               /// The virtual pad of the fingers; the game polls it like a controller.
               pub(super) fn ios_pad_state(&mut self) -> PadState {
-                  set_menu(self.pad_in_menu());
+                  let menu = self.pad_in_menu();
+                  set_menu(menu);
+                  if let Some(slot) = take_slot()
+                      && !menu
+                      && !self.spectator()
+                  {
+                      self.selected = slot;
+                  }
                   state()
               }
           }

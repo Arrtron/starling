@@ -432,9 +432,9 @@ jobs:
           ])
           # On-screen controls: the fingers are a virtual game pad (the game plays with a pad already).
           IOS_TOUCH = r'''//! iOS: on-screen controls in the style of Minecraft Bedrock. Fingers become a virtual game pad, which
-          //! the game already plays with: a fixed stick on the left, JUMP and SNEAK on the right, the hotbar and
-          //! the "..." inventory button at the bottom, CHAT / pause / view at the top. A tap on the world uses or
-          //! places, a long press mines or hits, a drag turns the view.
+          //! the game already plays with: the classic D-pad on the left (its centre sneaks, a double tap on the up
+          //! arrow sprints), JUMP on the right, the hotbar and the "..." inventory button at the bottom, pause and
+          //! chat at the top. A tap on the world uses or places, a long press mines or hits, a drag turns the view.
           use horizon_client::gamepad::{Button, PadState};
           use horizon_client::hud::{HudAtlas, HudBatch, rgba};
           use std::sync::Mutex;
@@ -457,12 +457,11 @@ jobs:
               menu: bool,
           }
 
-          const BTNS: [Btn; 6] = [
-              Btn { label: "^", x: 0.89, y: 0.70, r: 0.105, kind: Kind::Pad(Button::South), menu: false },
-              Btn { label: "v", x: 0.77, y: 0.84, r: 0.07, kind: Kind::Pad(Button::RightStick), menu: false },
-              Btn { label: "T", x: 0.43, y: 0.075, r: 0.058, kind: Kind::Pad(Button::DPadRight), menu: false },
-              Btn { label: "II", x: 0.57, y: 0.075, r: 0.058, kind: Kind::Pad(Button::Start), menu: false },
-              Btn { label: "O", x: 0.91, y: 0.075, r: 0.058, kind: Kind::Pad(Button::DPadUp), menu: false },
+          const BTNS: [Btn; 5] = [
+              Btn { label: "^", x: 0.91, y: 0.76, r: 0.09, kind: Kind::Pad(Button::South), menu: false },
+              Btn { label: "II", x: 0.465, y: 0.075, r: 0.055, kind: Kind::Pad(Button::Start), menu: false },
+              Btn { label: "T", x: 0.535, y: 0.075, r: 0.055, kind: Kind::Pad(Button::DPadRight), menu: false },
+              Btn { label: "O", x: 0.93, y: 0.075, r: 0.055, kind: Kind::Pad(Button::DPadUp), menu: false },
               Btn { label: "BACK", x: 0.07, y: 0.11, r: 0.08, kind: Kind::Pad(Button::East), menu: true },
           ];
           /// The "..." button next to the hotbar: its place follows the hotbar's.
@@ -475,7 +474,7 @@ jobs:
 
           #[derive(Clone, Copy, PartialEq)]
           enum Role {
-              Stick,
+              Dpad,
               Look,
               Press(usize),
               Ignore,
@@ -487,6 +486,10 @@ jobs:
               pos: [f32; 2],
               since: Instant,
               travelled: f32,
+              /// A D-pad finger that came down right after an "up" tap: the up arrow sprints.
+              sprint: bool,
+              /// A D-pad finger that held the up arrow (for the double tap).
+              up_seen: bool,
           }
 
           struct Pad {
@@ -501,6 +504,8 @@ jobs:
               tap_until: Option<Instant>,
               /// A hotbar slot that was tapped.
               slot: Option<usize>,
+              /// When a finger that held the up arrow let go.
+              last_up: Option<Instant>,
           }
 
           static PAD: Mutex<Pad> = Mutex::new(Pad {
@@ -510,6 +515,7 @@ jobs:
               look: [0.0; 2],
               tap_until: None,
               slot: None,
+              last_up: None,
           });
 
           fn info(i: usize) -> (&'static str, Kind, bool) {
@@ -531,12 +537,29 @@ jobs:
               }
           }
 
-          fn stick_base(size: [f32; 2]) -> [f32; 2] {
-              [size[0] * 0.15, size[1] * 0.70]
+          /// The centre of the D-pad.
+          fn dpad_base(size: [f32; 2]) -> [f32; 2] {
+              [size[0] * 0.15, size[1] * 0.72]
           }
 
-          fn stick_radius(size: [f32; 2]) -> f32 {
-              size[1] * 0.15
+          /// The side of one D-pad square.
+          fn dpad_side(size: [f32; 2]) -> f32 {
+              size[1] * 0.11
+          }
+
+          /// Where a finger on the D-pad points: -1/0/1 per axis (up is positive), and whether it is on the
+          /// centre square (sneak).
+          fn dpad_dir(pos: [f32; 2], size: [f32; 2]) -> ([f32; 2], bool) {
+              let base = dpad_base(size);
+              let side = dpad_side(size);
+              let (dx, dy) = (pos[0] - base[0], pos[1] - base[1]);
+              if dx.abs() < side * 0.55 && dy.abs() < side * 0.55 {
+                  return ([0.0, 0.0], true);
+              }
+              let len = (dx * dx + dy * dy).sqrt();
+              let ax = if dx.abs() > 0.38 * len { dx.signum() } else { 0.0 };
+              let ay = if dy.abs() > 0.38 * len { -dy.signum() } else { 0.0 };
+              ([ax, ay], false)
           }
 
           /// The window size in pixels (landscape).
@@ -576,7 +599,8 @@ jobs:
               match phase {
                   TouchPhase::Started => {
                       let menu = pad.menu;
-                      let finger = |role| Finger { id, role, pos: [x, y], since: now, travelled: 0.0 };
+                      let finger =
+                          |role| Finger { id, role, pos: [x, y], since: now, travelled: 0.0, sprint: false, up_seen: false };
                       for i in 0..=INV {
                           if info(i).2 != menu {
                               continue;
@@ -597,9 +621,18 @@ jobs:
                           pad.fingers.push(finger(Role::Ignore));
                           return true;
                       }
-                      let base = stick_base(size);
-                      let reach = stick_radius(size) * 1.7;
-                      let role = if (x - base[0]).powi(2) + (y - base[1]).powi(2) <= reach * reach { Role::Stick } else { Role::Look };
+                      let base = dpad_base(size);
+                      let reach = dpad_side(size) * 1.75;
+                      if (x - base[0]).abs() <= reach && (y - base[1]).abs() <= reach {
+                          let up = dpad_dir([x, y], size).0[1] > 0.0;
+                          let sprint = up && pad.last_up.is_some_and(|t| now.duration_since(t) < Duration::from_millis(350));
+                          let mut f = finger(Role::Dpad);
+                          f.sprint = sprint;
+                          f.up_seen = up;
+                          pad.fingers.push(f);
+                          return true;
+                      }
+                      let role = Role::Look;
                       pad.fingers.push(finger(role));
                       true
                   }
@@ -609,6 +642,9 @@ jobs:
                       };
                       let (dx, dy) = (x - pad.fingers[f].pos[0], y - pad.fingers[f].pos[1]);
                       pad.fingers[f].pos = [x, y];
+                      if pad.fingers[f].role == Role::Dpad && dpad_dir([x, y], size).0[1] > 0.0 {
+                          pad.fingers[f].up_seen = true;
+                      }
                       if pad.fingers[f].role == Role::Look {
                           pad.fingers[f].travelled += (dx * dx + dy * dy).sqrt();
                           if pad.fingers[f].travelled > 6.0 {
@@ -623,6 +659,9 @@ jobs:
                           return false;
                       };
                       let finger = pad.fingers.remove(f);
+                      if finger.role == Role::Dpad {
+                          pad.last_up = finger.up_seen.then_some(now);
+                      }
                       if finger.role == Role::Look && finger.travelled < SLOP && finger.since.elapsed() < HOLD {
                           pad.tap_until = Some(now + Duration::from_millis(60));
                       }
@@ -637,16 +676,15 @@ jobs:
               let Ok(pad) = PAD.lock() else {
                   return s;
               };
-              let base = stick_base(pad.size);
-              let radius = stick_radius(pad.size);
               for f in &pad.fingers {
                   match f.role {
-                      Role::Stick => {
-                          let (dx, dy) = ((f.pos[0] - base[0]) / radius, (f.pos[1] - base[1]) / radius);
-                          let len = (dx * dx + dy * dy).sqrt();
-                          let k = if len > 1.0 { 1.0 / len } else { 1.0 };
-                          s.left = [dx * k, -dy * k];
-                          if len > 1.3 {
+                      Role::Dpad => {
+                          let ([ax, ay], centre) = dpad_dir(f.pos, pad.size);
+                          let k = if ax != 0.0 && ay != 0.0 { std::f32::consts::FRAC_1_SQRT_2 } else { 1.0 };
+                          s.left = [ax * k, ay * k];
+                          if centre {
+                              s.set(Button::RightStick, true);
+                          } else if f.sprint && ay > 0.0 {
                               s.set(Button::LeftStick, true);
                           }
                       }
@@ -684,25 +722,41 @@ jobs:
               }
           }
 
-          /// The controls, over the game.
+          /// The controls, over the game. Touches and the layout are in window pixels; the HUD draws in GUI units.
           pub fn draw(b: &mut HudBatch, a: &HudAtlas) {
               let Ok(pad) = PAD.lock() else {
                   return;
               };
-              let size = [b.width, b.height];
+              let size = pad.size;
+              let sc = b.scale.max(1.0);
               if !pad.menu {
-                  let base = stick_base(size);
-                  let ring = stick_radius(size);
-                  disc(b, a, base[0], base[1], ring, rgba(255, 255, 255, 60));
-                  disc(b, a, base[0], base[1], ring - 3.0, rgba(0, 0, 0, 90));
-                  let mut knob = base;
-                  if let Some(f) = pad.fingers.iter().find(|f| f.role == Role::Stick) {
-                      let (dx, dy) = (f.pos[0] - base[0], f.pos[1] - base[1]);
-                      let len = (dx * dx + dy * dy).sqrt();
-                      let k = if len > ring { ring / len } else { 1.0 };
-                      knob = [base[0] + dx * k, base[1] + dy * k];
+                  let base = dpad_base(size);
+                  let side = dpad_side(size);
+                  let step = side * 1.04;
+                  let active = pad.fingers.iter().find(|f| f.role == Role::Dpad).map(|f| dpad_dir(f.pos, size));
+                  let (dir, centre) = active.unwrap_or(([0.0; 2], false));
+                  // (offset x, offset y in screen direction, label, pressed)
+                  let cells = [
+                      (0.0, -1.0, "^", dir[1] > 0.0),
+                      (0.0, 1.0, "v", dir[1] < 0.0),
+                      (-1.0, 0.0, "<", dir[0] < 0.0),
+                      (1.0, 0.0, ">", dir[0] > 0.0),
+                      (0.0, 0.0, "", centre),
+                  ];
+                  for (ox, oy, label, down) in cells {
+                      let (cx, cy) = ((base[0] + ox * step) / sc, (base[1] + oy * step) / sc);
+                      let (side, half) = (side / sc, side / sc / 2.0);
+                      b.fill(a, cx - half, cy - half, side, side, rgba(255, 255, 255, 120));
+                      let inner = if down { rgba(255, 255, 255, 150) } else { rgba(0, 0, 0, 110) };
+                      b.fill(a, cx - half + 2.0, cy - half + 2.0, side - 4.0, side - 4.0, inner);
+                      if !label.is_empty() {
+                          let width = HudBatch::text_width(a, label);
+                          let start = b.vertices.len();
+                          b.text(a, label, cx - width / 2.0, cy - 4.0, rgba(255, 255, 255, 235), true);
+                          let scale = (side * 0.5 / 8.0).max(0.5);
+                          b.scale_since(start, cx, cy, scale, scale);
+                      }
                   }
-                  disc(b, a, knob[0], knob[1], ring * 0.38, rgba(255, 255, 255, 140));
               }
               for i in 0..=INV {
                   let (label, _, menu) = info(i);
@@ -710,10 +764,11 @@ jobs:
                       continue;
                   }
                   let (c, r) = layout(i, size);
+                  let (c, r) = ([c[0] / sc, c[1] / sc], r / sc);
                   let down = pad.fingers.iter().any(|f| f.role == Role::Press(i));
                   disc(b, a, c[0], c[1], r, rgba(255, 255, 255, 120));
                   let inner = if down { rgba(255, 255, 255, 150) } else { rgba(0, 0, 0, 110) };
-                  disc(b, a, c[0], c[1], r - 3.0, inner);
+                  disc(b, a, c[0], c[1], r - 2.0, inner);
                   let width = HudBatch::text_width(a, label);
                   let start = b.vertices.len();
                   b.text(a, label, c[0] - width / 2.0, c[1] - 4.0, rgba(255, 255, 255, 235), true);

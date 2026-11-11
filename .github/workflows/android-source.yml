@@ -446,6 +446,7 @@ jobs:
           enum Icon {
               Up,
               Down,
+              Sprint,
               Pause,
               Chat,
               View,
@@ -464,13 +465,14 @@ jobs:
               menu: bool,
           }
 
-          const BTNS: [Btn; 6] = [
-              Btn { icon: Icon::Up, x: 0.91, y: 0.72, r: 0.095, button: Button::South, menu: false },
-              Btn { icon: Icon::Down, x: 0.78, y: 0.86, r: 0.065, button: Button::RightStick, menu: false },
-              Btn { icon: Icon::Pause, x: 0.465, y: 0.075, r: 0.052, button: Button::Start, menu: false },
-              Btn { icon: Icon::Chat, x: 0.535, y: 0.075, r: 0.052, button: Button::DPadRight, menu: false },
-              Btn { icon: Icon::View, x: 0.93, y: 0.075, r: 0.052, button: Button::DPadUp, menu: false },
-              Btn { icon: Icon::Back, x: 0.07, y: 0.11, r: 0.07, button: Button::East, menu: true },
+          const BTNS: [Btn; 7] = [
+              Btn { icon: Icon::Up, x: 0.926, y: 0.404, r: 0.065, button: Button::South, menu: false },
+              Btn { icon: Icon::Down, x: 0.926, y: 0.595, r: 0.065, button: Button::RightStick, menu: false },
+              Btn { icon: Icon::Sprint, x: 0.826, y: 0.50, r: 0.065, button: Button::LeftStick, menu: false },
+              Btn { icon: Icon::View, x: 0.467, y: 0.054, r: 0.036, button: Button::DPadUp, menu: false },
+              Btn { icon: Icon::Chat, x: 0.499, y: 0.054, r: 0.036, button: Button::DPadRight, menu: false },
+              Btn { icon: Icon::Pause, x: 0.532, y: 0.054, r: 0.036, button: Button::Start, menu: false },
+              Btn { icon: Icon::Back, x: 0.07, y: 0.11, r: 0.06, button: Button::East, menu: true },
           ];
           /// The "..." button next to the hotbar: its place follows the hotbar's.
           const INV: usize = BTNS.len();
@@ -511,6 +513,10 @@ jobs:
               tap_at: [f32; 2],
               /// A hotbar slot that was tapped.
               slot: Option<usize>,
+              /// The chat is open (its text field and the keyboard are up).
+              chat: bool,
+              /// A finger touched the game above the keyboard: the chat is to close.
+              dismiss: bool,
           }
 
           static PAD: Mutex<Pad> = Mutex::new(Pad {
@@ -521,6 +527,8 @@ jobs:
               tap_until: None,
               tap_at: [0.0; 2],
               slot: None,
+              chat: false,
+              dismiss: false,
           });
 
           fn info(i: usize) -> (Icon, Button, bool) {
@@ -531,11 +539,11 @@ jobs:
               }
           }
 
-          /// Centre and radius of a button, in pixels.
+          /// Centre and half-size of a button, in pixels.
           fn layout(i: usize, size: [f32; 2]) -> ([f32; 2], f32) {
               if i == INV {
                   let b = HudBatch::new([size[0] as u32, size[1] as u32]);
-                  ([(b.width / 2.0 + 91.0 + 14.0) * b.scale, (b.height - 11.0) * b.scale], 12.0 * b.scale)
+                  ([(b.width / 2.0 + 91.0 + 12.0) * b.scale, (b.height - 11.0) * b.scale], 10.5 * b.scale)
               } else {
                   let b = &BTNS[i];
                   ([b.x * size[0], b.y * size[1]], b.r * size[1])
@@ -571,6 +579,21 @@ jobs:
                   pad.look = [0.0; 2];
                   pad.tap_until = None;
               }
+          }
+
+          /// The chat is open (or not).
+          pub fn set_chat(chat: bool) {
+              if let Ok(mut pad) = PAD.lock() {
+                  pad.chat = chat;
+                  if !chat {
+                      pad.dismiss = false;
+                  }
+              }
+          }
+
+          /// A tap above the keyboard while the chat is open, since the last call.
+          pub fn take_dismiss() -> bool {
+              PAD.lock().map(|mut p| std::mem::take(&mut p.dismiss)).unwrap_or(false)
           }
 
           /// A hotbar slot tapped since the last call.
@@ -611,13 +634,17 @@ jobs:
                               continue;
                           }
                           let (c, r) = layout(i, size);
-                          let reach = r * 1.25;
+                          let reach = r * 1.5;
                           if (x - c[0]).powi(2) + (y - c[1]).powi(2) <= reach * reach {
                               pad.fingers.push(finger(Role::Press(i)));
                               return true;
                           }
                       }
                       if menu {
+                          // The system keyboard and its text field take their own touches: this one is above them.
+                          if pad.chat {
+                              pad.dismiss = true;
+                          }
                           return false;
                       }
                       let b = HudBatch::new([size[0] as u32, size[1] as u32]);
@@ -721,58 +748,83 @@ jobs:
               }
           }
 
-          /// A white pictogram in a button of radius `r`.
+          /// A pixel-style arrow with a bar: up (`s` = 1) or down (`s` = -1).
+          fn arrow(b: &mut HudBatch, a: &HudAtlas, cx: f32, cy: f32, u: f32, s: f32, ink: u32) {
+              let p = u / 5.0;
+              let mut rect = |x: f32, dy: f32, w: f32, dh: f32| {
+                  let y = if s > 0.0 { cy + dy } else { cy - dy - dh };
+                  b.fill(a, x, y, w, dh, ink);
+              };
+              for i in 0..5 {
+                  let half = (i as f32 + 0.5) * p;
+                  rect(cx - half, -u * 0.9 + i as f32 * p, half * 2.0, p + 0.4);
+              }
+              rect(cx - u * 0.28, -u * 0.9 + 5.0 * p, u * 0.56, u * 0.6);
+              rect(cx - u, u * 0.8, u * 2.0, (p * 0.7).max(1.0));
+          }
+
+          /// A dark pictogram in a button whose half-size is `r`.
           fn icon(b: &mut HudBatch, a: &HudAtlas, icon: Icon, cx: f32, cy: f32, r: f32) {
-              let white = rgba(255, 255, 255, 240);
-              let u = r * 0.42;
-              let w = (r * 0.17).max(1.5);
+              let ink = rgba(48, 48, 48, 255);
+              let light = rgba(236, 236, 236, 255);
+              let u = r * 0.52;
+              let w = (r * 0.16).max(1.5);
               match icon {
-                  Icon::Up => {
-                      stroke(b, a, [cx - u, cy + u * 0.45], [cx, cy - u * 0.55], w, white);
-                      stroke(b, a, [cx, cy - u * 0.55], [cx + u, cy + u * 0.45], w, white);
-                  }
-                  Icon::Down => {
-                      stroke(b, a, [cx - u, cy - u * 0.45], [cx, cy + u * 0.55], w, white);
-                      stroke(b, a, [cx, cy + u * 0.55], [cx + u, cy - u * 0.45], w, white);
+                  Icon::Up => arrow(b, a, cx, cy, u, 1.0, ink),
+                  Icon::Down => arrow(b, a, cx, cy, u, -1.0, ink),
+                  Icon::Sprint => {
+                      for dx in [-0.55, 0.35] {
+                          stroke(b, a, [cx + u * dx, cy - u * 0.8], [cx + u * (dx + 0.6), cy], w * 1.4, ink);
+                          stroke(b, a, [cx + u * (dx + 0.6), cy], [cx + u * dx, cy + u * 0.8], w * 1.4, ink);
+                      }
                   }
                   Icon::Back => {
-                      stroke(b, a, [cx + u * 0.4, cy - u], [cx - u * 0.6, cy], w, white);
-                      stroke(b, a, [cx - u * 0.6, cy], [cx + u * 0.4, cy + u], w, white);
+                      stroke(b, a, [cx + u * 0.4, cy - u], [cx - u * 0.6, cy], w * 1.4, ink);
+                      stroke(b, a, [cx - u * 0.6, cy], [cx + u * 0.4, cy + u], w * 1.4, ink);
                   }
                   Icon::Pause => {
-                      b.fill(a, cx - u * 0.75, cy - u, u * 0.55, u * 2.0, white);
-                      b.fill(a, cx + u * 0.2, cy - u, u * 0.55, u * 2.0, white);
+                      for dy in [-0.7, -0.1, 0.5] {
+                          b.fill(a, cx - u * 0.9, cy + u * dy, u * 1.8, u * 0.4, ink);
+                      }
                   }
                   Icon::Chat => {
                       let (l, t, rr, bt) = (cx - u, cy - u * 0.8, cx + u, cy + u * 0.5);
-                      stroke(b, a, [l, t], [rr, t], w, white);
-                      stroke(b, a, [l, bt], [rr, bt], w, white);
-                      stroke(b, a, [l, t], [l, bt], w, white);
-                      stroke(b, a, [rr, t], [rr, bt], w, white);
-                      stroke(b, a, [cx - u * 0.5, bt], [cx - u * 0.7, cy + u], w, white);
-                      stroke(b, a, [cx - u * 0.7, cy + u], [cx - u * 0.1, bt], w, white);
+                      stroke(b, a, [l, t], [rr, t], w, ink);
+                      stroke(b, a, [l, bt], [rr, bt], w, ink);
+                      stroke(b, a, [l, t], [l, bt], w, ink);
+                      stroke(b, a, [rr, t], [rr, bt], w, ink);
+                      stroke(b, a, [cx - u * 0.5, bt], [cx - u * 0.7, cy + u], w, ink);
+                      for dx in [-0.5, 0.0, 0.5] {
+                          b.fill(a, cx + u * dx - w / 2.0, cy - u * 0.15, w, w, ink);
+                      }
                   }
                   Icon::View => {
-                      let (l, t, rr, bt) = (cx - u, cy - u * 0.65, cx + u, cy + u * 0.65);
-                      stroke(b, a, [l, t], [rr, t], w, white);
-                      stroke(b, a, [l, bt], [rr, bt], w, white);
-                      stroke(b, a, [l, t], [l, bt], w, white);
-                      stroke(b, a, [rr, t], [rr, bt], w, white);
-                      disc(b, a, cx, cy, u * 0.38, white);
+                      // A head and shoulders.
+                      b.fill(a, cx - u * 0.35, cy - u * 0.95, u * 0.7, u * 0.7, ink);
+                      b.fill(a, cx - u * 0.8, cy - u * 0.1, u * 1.6, u * 0.45, ink);
+                      b.fill(a, cx - u * 0.55, cy + u * 0.35, u * 1.1, u * 0.55, ink);
                   }
                   Icon::Dots => {
-                      for dx in [-0.85, 0.0, 0.85] {
-                          disc(b, a, cx + u * dx, cy, (r * 0.13).max(1.2), white);
+                      for dx in [-0.8, 0.0, 0.8] {
+                          b.fill(a, cx + u * dx - w * 0.6, cy - w * 0.6, w * 1.2, w * 1.2, light);
                       }
                   }
               }
           }
 
-          /// A round button: a light rim, a dark translucent body (lighter while pressed).
+          /// A square button like Bedrock's: dark outline, a light top-left edge, a shadowed bottom-right edge.
           fn round_button(b: &mut HudBatch, a: &HudAtlas, cx: f32, cy: f32, r: f32, down: bool) {
-              disc(b, a, cx, cy, r, rgba(255, 255, 255, 150));
-              let body = if down { rgba(255, 255, 255, 120) } else { rgba(0, 0, 0, 105) };
-              disc(b, a, cx, cy, r - (r * 0.06).max(1.5), body);
+              let t = (r / 13.0).max(0.6);
+              let (x, y, s) = (cx - r, cy - r, r * 2.0);
+              let (body, light, shade) = if down {
+                  (rgba(92, 92, 92, 255), rgba(130, 130, 130, 255), rgba(150, 150, 150, 255))
+              } else {
+                  (rgba(118, 118, 118, 255), rgba(168, 168, 168, 255), rgba(78, 78, 78, 255))
+              };
+              b.fill(a, x, y, s, s, rgba(28, 28, 28, 255));
+              b.fill(a, x + t, y + t, s - 2.0 * t, s - 2.0 * t, shade);
+              b.fill(a, x + t, y + t, s - 3.0 * t, s - 3.0 * t, light);
+              b.fill(a, x + 2.0 * t, y + 2.0 * t, s - 4.0 * t, s - 4.0 * t, body);
           }
 
           /// The controls, over the game. Touches and the layout are in window pixels; the HUD draws in GUI units.
@@ -817,6 +869,10 @@ jobs:
               pub(super) fn ios_pad_state(&mut self) -> PadState {
                   let menu = self.pad_in_menu();
                   set_menu(menu);
+                  set_chat(self.screen == super::Screen::Chat);
+                  if take_dismiss() {
+                      self.chat_key_code(winit::keyboard::KeyCode::Escape, None);
+                  }
                   if let Some(slot) = take_slot()
                       && !menu
                       && !self.spectator()
@@ -858,6 +914,124 @@ jobs:
                '                                text: if state == ElementState::Pressed && !enter {', 1),
               ('                                logical_key: Key::Character(text.clone()),\n                                physical_key: PhysicalKey::Unidentified(\n                                    NativeKeyCode::Unidentified,\n                                ),',
                '                                logical_key: if enter {\n                                    Key::Named(NamedKey::Enter)\n                                } else {\n                                    Key::Character(text.clone())\n                                },\n                                physical_key: if enter {\n                                    PhysicalKey::Code(KeyCode::Enter)\n                                } else {\n                                    PhysicalKey::Unidentified(NativeKeyCode::Unidentified)\n                                },', 1),
+          ])
+          # Keyboard: no second (game) keyboard on iOS, the system one is used.
+          sub('crates/horizon-client/src/game/pad_menu.rs', [
+              ('    #[cfg(not(target_os = "android"))]\n    fn pad_open_keyboard(&mut self) {\n',
+               '    #[cfg(not(target_os = "android"))]\n    fn pad_open_keyboard(&mut self) {\n        #[cfg(target_os = "ios")]\n        if true {\n            return;\n        }\n', 1),
+          ])
+          # The chat moves above the system keyboard; copy / select all for the buttons.
+          sub('crates/horizon-client/src/game/chat.rs', [
+              ('    #[cfg(not(target_os = "android"))]\n    fn visible_chat_height(batch: &HudBatch) -> f32 {\n        batch.height\n    }\n',
+               '    #[cfg(target_os = "ios")]\n    fn visible_chat_height(batch: &HudBatch) -> f32 {\n        // The system keyboard covers about the lower half of a landscape phone.\n        batch.height * 0.5\n    }\n    #[cfg(not(any(target_os = "android", target_os = "ios")))]\n    fn visible_chat_height(batch: &HudBatch) -> f32 {\n        batch.height\n    }\n', 1),
+          ])
+          # A real text field above the system keyboard, with the usual paste / copy menu.
+          NATIVE_FIELD = r'''    pub fn set_ime_allowed(&self, allowed: bool) {
+                  use std::cell::RefCell;
+                  use std::rc::Rc;
+
+                  use block2::RcBlock;
+                  use objc2_foundation::NSString;
+
+                  // A real text field above the keyboard (made once): the system's own editing, with the paste / copy
+                  // menu. What is typed in it is passed on to the view as typed text and Backspaces.
+                  type Shared = (Retained<AnyObject>, Rc<RefCell<String>>);
+                  thread_local! {
+                      static FIELD: RefCell<Option<Shared>> = const { RefCell::new(None) };
+                  }
+                  unsafe {
+                      let existing = FIELD.with(|f| f.borrow().clone());
+                      let (field, last) = match existing {
+                          Some(pair) => pair,
+                          None if !allowed => return,
+                          None => {
+                              let bounds: CGRect = msg_send![&*self.view, bounds];
+                              let frame = CGRect {
+                                  origin: CGPoint { x: bounds.size.width * 0.1, y: 6.0 },
+                                  size: CGSize { width: bounds.size.width * 0.8, height: 40.0 },
+                              };
+                              let field: Retained<AnyObject> =
+                                  msg_send_id![msg_send_id![class!(UITextField), alloc], initWithFrame: frame];
+                              let white: Retained<AnyObject> = msg_send_id![class!(UIColor), whiteColor];
+                              let _: () = msg_send![&*field, setBackgroundColor: &*white];
+                              let _: () = msg_send![&*field, setBorderStyle: 3isize];
+                              let _: () = msg_send![&*field, setAutocapitalizationType: 0isize];
+                              let _: () = msg_send![&*field, setAutocorrectionType: 1isize];
+                              let _: () = msg_send![&*field, setReturnKeyType: 7isize];
+                              let last = Rc::new(RefCell::new(String::new()));
+
+                              let changed = {
+                                  let (field, last, view) = (field.clone(), last.clone(), self.view.clone());
+                                  RcBlock::new(move |_action: *mut AnyObject| {
+                                      let text: Option<Retained<NSString>> = msg_send_id![&*field, text];
+                                      let now = text.map(|t| t.to_string()).unwrap_or_default();
+                                      let prev = last.borrow().clone();
+                                      let common = prev.chars().zip(now.chars()).take_while(|(a, b)| a == b).count();
+                                      for _ in 0..prev.chars().count() - common {
+                                          let _: () = msg_send![&*view, deleteBackward];
+                                      }
+                                      let added: String = now.chars().skip(common).collect();
+                                      if !added.is_empty() {
+                                          let ns = NSString::from_str(&added);
+                                          let _: () = msg_send![&*view, insertText: &*ns];
+                                      }
+                                      *last.borrow_mut() = now;
+                                  })
+                              };
+                              let action: Retained<AnyObject> =
+                                  msg_send_id![class!(UIAction), actionWithHandler: &*changed];
+                              // UIControlEventEditingChanged
+                              let _: () = msg_send![&*field, addAction: &*action, forControlEvents: 1usize << 17];
+
+                              let submit = {
+                                  let view = self.view.clone();
+                                  RcBlock::new(move |_action: *mut AnyObject| {
+                                      let ns = NSString::from_str("\n");
+                                      let _: () = msg_send![&*view, insertText: &*ns];
+                                  })
+                              };
+                              let action: Retained<AnyObject> =
+                                  msg_send_id![class!(UIAction), actionWithHandler: &*submit];
+                              // UIControlEventEditingDidEndOnExit
+                              let _: () = msg_send![&*field, addAction: &*action, forControlEvents: 1usize << 19];
+
+                              let _: () = msg_send![&*self.view, addSubview: &*field];
+                              FIELD.with(|f| *f.borrow_mut() = Some((field.clone(), last.clone())));
+                              (field, last)
+                          }
+                      };
+                      if allowed {
+                          last.borrow_mut().clear();
+                          let empty = NSString::from_str("");
+                          let _: () = msg_send![&*field, setText: &*empty];
+                          let _: () = msg_send![&*field, setHidden: false];
+                          let _: bool = msg_send![&*field, becomeFirstResponder];
+                      } else {
+                          let _: bool = msg_send![&*field, resignFirstResponder];
+                          let _: () = msg_send![&*field, setHidden: true];
+                      }
+                  }
+              }
+          '''
+          sub('third_party/winit/src/platform_impl/ios/window.rs', [
+              ('    pub fn set_ime_allowed(&self, allowed: bool) {\n        if allowed {\n            unsafe {\n                self.view.becomeFirstResponder();\n            }\n        } else {\n            unsafe {\n                self.view.resignFirstResponder();\n            }\n        }\n    }\n', NATIVE_FIELD, 1),
+          ])
+          # The boot screen prints the console's last lines (a Horizon feature); not on the phone.
+          sub('crates/horizon-client/src/ui_theme.rs', [
+              ('pub fn draw_boot_log(atlas: &HudAtlas, batch: &mut HudBatch, logs: &[String]) {\n    if logs.is_empty() {',
+               'pub fn draw_boot_log(atlas: &HudAtlas, batch: &mut HudBatch, logs: &[String]) {\n    if logs.is_empty() || cfg!(target_os = "ios") {', 1),
+          ])
+          # Memory: the phone's chunk workers and graphics memory are set as on Android (fewer threads in flight,
+          # smaller graphics memory blocks), so far chunks do not push the app over iOS's memory limit.
+          sub('crates/horizon-client/src/game/world_loading.rs', [
+              ('    let worker_threads = if cfg!(target_os = "android") && !options.execution_role.is_client() {\n        (res.threads() / 2).max(2)\n    } else if cfg!(target_os = "android") {\n        res.threads().min(4)\n',
+               '    let worker_threads = if cfg!(any(target_os = "android", target_os = "ios")) && !options.execution_role.is_client() {\n        (res.threads() / 2).max(2)\n    } else if cfg!(any(target_os = "android", target_os = "ios")) {\n        res.threads().min(4)\n', 1),
+          ])
+          sub('crates/horizon-client-render/src/graphics.rs', [
+              ('        let auto = if cfg!(target_os = "android") {', '        let auto = if cfg!(any(target_os = "android", target_os = "ios")) {', 1),
+          ])
+          sub('crates/horizon-client-render/src/gfx.rs', [
+              ('        memory_hints: if cfg!(target_os = "android") {', '        memory_hints: if cfg!(any(target_os = "android", target_os = "ios")) {', 1),
           ])
           print('iOS edits applied')
           PY_EOF

@@ -513,10 +513,12 @@ jobs:
               tap_at: [f32; 2],
               /// A hotbar slot that was tapped.
               slot: Option<usize>,
-              /// The chat is open (its text field and the keyboard are up).
-              chat: bool,
-              /// A finger touched the game above the keyboard: the chat is to close.
+              /// The system keyboard is up (a text field of the game has the focus).
+              kb: bool,
+              /// A finger touched the game above the keyboard: the keyboard (and the chat) is to close.
               dismiss: bool,
+              /// A finger touched the game while the keyboard was down: a field tapped again may open it.
+              reopen: bool,
           }
 
           static PAD: Mutex<Pad> = Mutex::new(Pad {
@@ -527,9 +529,21 @@ jobs:
               tap_until: None,
               tap_at: [0.0; 2],
               slot: None,
-              chat: false,
+              kb: false,
               dismiss: false,
+              reopen: false,
           });
+
+          /// The keyboard was closed by a tap above it while its text field still has the focus.
+          static KB_HIDDEN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+          pub fn kb_hidden() -> bool {
+              KB_HIDDEN.load(std::sync::atomic::Ordering::Relaxed)
+          }
+
+          pub fn set_kb_hidden(hidden: bool) {
+              KB_HIDDEN.store(hidden, std::sync::atomic::Ordering::Relaxed);
+          }
 
           fn info(i: usize) -> (Icon, Button, bool) {
               if i == INV {
@@ -539,7 +553,7 @@ jobs:
               }
           }
 
-          /// Centre and half-size of a button, in pixels.
+          /// Centre and radius of a button, in pixels.
           fn layout(i: usize, size: [f32; 2]) -> ([f32; 2], f32) {
               if i == INV {
                   let b = HudBatch::new([size[0] as u32, size[1] as u32]);
@@ -581,19 +595,24 @@ jobs:
               }
           }
 
-          /// The chat is open (or not).
-          pub fn set_chat(chat: bool) {
+          /// The system keyboard is up (or not), as the game says each frame.
+          pub fn set_kb(kb: bool) {
               if let Ok(mut pad) = PAD.lock() {
-                  pad.chat = chat;
-                  if !chat {
+                  pad.kb = kb;
+                  if !kb {
                       pad.dismiss = false;
                   }
               }
           }
 
-          /// A tap above the keyboard while the chat is open, since the last call.
+          /// A tap above the keyboard while it is up, since the last call.
           pub fn take_dismiss() -> bool {
               PAD.lock().map(|mut p| std::mem::take(&mut p.dismiss)).unwrap_or(false)
+          }
+
+          /// A tap on the game while the keyboard was down, since the last call.
+          pub fn take_reopen() -> bool {
+              PAD.lock().map(|mut p| std::mem::take(&mut p.reopen)).unwrap_or(false)
           }
 
           /// A hotbar slot tapped since the last call.
@@ -642,8 +661,11 @@ jobs:
                       }
                       if menu {
                           // The system keyboard and its text field take their own touches: this one is above them.
-                          if pad.chat {
+                          // The touch still goes on to the screen as a click.
+                          if pad.kb {
                               pad.dismiss = true;
+                          } else {
+                              pad.reopen = true;
                           }
                           return false;
                       }
@@ -869,9 +891,17 @@ jobs:
               pub(super) fn ios_pad_state(&mut self) -> PadState {
                   let menu = self.pad_in_menu();
                   set_menu(menu);
-                  set_chat(self.screen == super::Screen::Chat);
+                  set_kb(self.ime_allowed);
+                  if take_reopen() {
+                      set_kb_hidden(false);
+                  }
                   if take_dismiss() {
-                      self.chat_key_code(winit::keyboard::KeyCode::Escape, None);
+                      if self.screen == super::Screen::Chat {
+                          self.chat_key_code(winit::keyboard::KeyCode::Escape, None);
+                      } else {
+                          // A text field of a menu: only the keyboard goes away.
+                          set_kb_hidden(true);
+                      }
                   }
                   if let Some(slot) = take_slot()
                       && !menu
@@ -905,6 +935,9 @@ jobs:
                '            None => {\n                #[cfg(target_os = "ios")]\n                {\n                    self.ios_pad_state()\n                }\n                #[cfg(not(target_os = "ios"))]\n                {\n                    self.pad.read()\n                }\n            }\n', 1),
               ('    pub(super) fn pad_look(&mut self, seconds: f32) {\n',
                '    pub(super) fn pad_look(&mut self, seconds: f32) {\n        #[cfg(target_os = "ios")]\n        {\n            let [dx, dy] = super::ios_touch::take_look();\n            if (dx != 0.0 || dy != 0.0) && !self.pad_in_menu() && self.player.is_some() {\n                let (yaw, pitch) = (f64::from(dx) * 1.2, f64::from(dy) * 1.2);\n                self.tutorial.mouse(yaw * 0.15, pitch * 0.15);\n                self.turn_player(yaw, pitch);\n            }\n        }\n', 1),
+              # The on-screen Sprint button must always land (as on Android), screen or not.
+              ('            #[cfg(target_os = "android")]\n            "key.sprint" => {',
+               '            #[cfg(target_os = "ios")]\n            "key.sprint" => self.hold_toggle(1, down),\n            #[cfg(target_os = "android")]\n            "key.sprint" => {', 1),
           ])
           # The keyboard's Return key: winit sends it as the character "\n"; the game wants the Enter key.
           sub('third_party/winit/src/platform_impl/ios/view.rs', [
@@ -924,6 +957,16 @@ jobs:
           sub('crates/horizon-client/src/game/chat.rs', [
               ('    #[cfg(not(target_os = "android"))]\n    fn visible_chat_height(batch: &HudBatch) -> f32 {\n        batch.height\n    }\n',
                '    #[cfg(target_os = "ios")]\n    fn visible_chat_height(batch: &HudBatch) -> f32 {\n        // The system keyboard covers about the lower half of a landscape phone.\n        batch.height * 0.4\n    }\n    #[cfg(not(any(target_os = "android", target_os = "ios")))]\n    fn visible_chat_height(batch: &HudBatch) -> f32 {\n        batch.height\n    }\n', 1),
+          ])
+          # Content mods (.hmod) on the Mods page of a build without the code-mod runtime (iOS).
+          sub('crates/horizon-client/src/game/mods.rs', [
+              ('        let found = horizon_mods::find(&dir).len() + self.mods.dev.len();\n        if found > 0 {\n            log::warn!(\n                \"Horizon: {found} mod(s) not started: this build has no mod runtime (build with --features mods)\"\n            );\n        }\n        self.list_native_mods();\n',
+               '        let dev = self.mods.dev.len();\n        if dev > 0 {\n            log::warn!(\"Horizon: {dev} dev mod(s) not started: this build has no mod runtime\");\n        }\n        // Content mods (.hmod) load in every build: list them on the Mods page so they can be turned on.\n        self.settings.mods.installed = horizon_mods::find(&dir)\n            .iter()\n            .map(|path| {\n                let file = path.file_name().unwrap_or_default().to_string_lossy().into_owned();\n                match horizon_mods::Package::read(path) {\n                    Ok(package) => {\n                        let m = package.manifest;\n                        let may: Vec<&str> = m.capabilities.iter().map(|c| c.describe()).collect();\n                        let may = if may.is_empty() {\n                            \"Asks for nothing.\".to_owned()\n                        } else {\n                            format!(\"May {}.\", may.join(\", \"))\n                        };\n                        mod_list::Installed {\n                            id: m.id.clone(),\n                            title: format!(\"{} {}\", m.name, m.version),\n                            description: format!(\"{may} {}\", m.description).trim().to_owned(),\n                            problem: None,\n                            dev: false,\n                            has_settings: false,\n                            native: None,\n                        }\n                    }\n                    Err(e) => mod_list::Installed {\n                        id: String::new(),\n                        title: file,\n                        description: String::new(),\n                        problem: Some(format!(\"Stopped: {e}\")),\n                        dev: false,\n                        has_settings: false,\n                        native: None,\n                    },\n                }\n            })\n            .collect();\n        self.list_native_mods();\n', 1),
+          ])
+          # A tap above the keyboard hides it in every menu too (the field keeps its focus in the game).
+          sub('crates/horizon-client/src/game/ime.rs', [
+              ('        #[cfg(not(target_os = "android"))]\n        let want = self.text_field_focused();\n',
+               '        #[cfg(target_os = "ios")]\n        let want = {\n            let focused = self.text_field_focused();\n            if !focused {\n                super::ios_touch::set_kb_hidden(false);\n            }\n            focused && !super::ios_touch::kb_hidden()\n        };\n        #[cfg(not(any(target_os = "android", target_os = "ios")))]\n        let want = self.text_field_focused();\n', 1),
           ])
           # A real text field above the system keyboard, with the usual paste / copy menu.
           NATIVE_FIELD = r'''    pub fn set_ime_allowed(&self, allowed: bool) {
